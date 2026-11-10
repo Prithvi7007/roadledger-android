@@ -1,0 +1,14 @@
+.gradle/
+**/build/
+local.properties
+*.keystore
+*.jks
+.idea/
+# Never commit personal vehicle backups or exported data
+*.csv
+*.db
+*.sqlite
+*.sqlite3
+*.xapk
+*.apk
+*.zip
