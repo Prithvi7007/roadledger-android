@@ -1,4 +1,21 @@
-# RoadLedger — original offline-first Android vehicle log
+# RoadLedger v0.2 — original offline-first Android vehicle log
+
+## What's new in v0.2
+- **Black / charcoal / gold** night-driving visual theme.
+- Import a **Fuelio CSV backup** directly from Android's file picker or Google Drive's document provider, without uploading it to any server.
+- Preview the record counts and confirm before importing. Imports are **atomic, additive, and deduplicated** by exported source GUIDs.
+- Preserves original fill-up timestamps and totals; converts Fuelio's miles and US gallons to SI internal storage while showing **miles, gallons and US MPG** for imported US-unit vehicles.
+- Flags missed fill-ups; the fuel-economy calculation excludes intervals broken by missing history.
+- Imports vehicle profiles, fill-up history, expense history and trip logs. GPS trips with no odometer readings use their recorded GPS distance (meters) and are labeled as such.
+- CSV export remains available for all local records.
+
+**Not yet imported:** Favorite fuel stations, photo attachments / references, GPS track files, VIN/plate details, multiple-tank accounting, and custom categories. The source Fuelio CSV remains unchanged; preserve your backup for future migrations.
+
+**Privacy:** The importer runs entirely on your phone. Do not commit real user exports to GitHub. The app does not request INTERNET, Drive, or GPS permissions; Android's system document picker handles Google Drive file access.
+
+**IMPORTANT UPGRADE NOTE:** GitHub Actions debug builds may use different debug signing certificates each run. Android can reject installing v0.2 over v0.1 with 'App not installed' / signature mismatch. Before any uninstall, export existing RoadLedger data (Garage -> Export). The current release cannot import its own exported CSV yet, so if those manually entered records matter, keep v0.1 installed until a stable signing mechanism is configured. Never uninstall to force an update without checking whether you will lose existing data.
+
+---
 
 A clean-room native Android MVP designed from general architectural lessons in a vehicle/fuel-tracking application audit. **No Fuelio source code, assets, package names, API credentials, or branded designs are included.**
 

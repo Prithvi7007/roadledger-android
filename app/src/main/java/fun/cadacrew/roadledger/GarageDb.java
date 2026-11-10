@@ -12,7 +12,7 @@ import java.util.List;
 
 public final class GarageDb extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "roadledger.db";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     public GarageDb(Context context) {
         super(context, DATABASE_NAME, null, VERSION);
@@ -24,30 +24,42 @@ public final class GarageDb extends SQLiteOpenHelper {
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE vehicles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, make TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '')");
-        db.execSQL("CREATE TABLE fuel (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, date INTEGER NOT NULL, odometer REAL NOT NULL CHECK(odometer>=0), liters REAL NOT NULL CHECK(liters>0), cost REAL NOT NULL CHECK(cost>=0), full_tank INTEGER NOT NULL CHECK(full_tank IN (0,1)))");
+        db.execSQL("CREATE TABLE vehicles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, make TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', unit_system INTEGER NOT NULL DEFAULT 0 CHECK(unit_system IN (0,1)))");
+        db.execSQL("CREATE TABLE fuel (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, date INTEGER NOT NULL, odometer REAL NOT NULL CHECK(odometer>=0), liters REAL NOT NULL CHECK(liters>0), cost REAL NOT NULL CHECK(cost>=0), full_tank INTEGER NOT NULL CHECK(full_tank IN (0,1)), missed_fillup INTEGER NOT NULL DEFAULT 0 CHECK(missed_fillup IN (0,1)))");
         db.execSQL("CREATE TABLE expenses (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, date INTEGER NOT NULL, category TEXT NOT NULL, amount REAL NOT NULL CHECK(amount>=0), odometer REAL NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '')");
         db.execSQL("CREATE TABLE trips (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, date INTEGER NOT NULL, start_km REAL NOT NULL, end_km REAL NOT NULL, note TEXT NOT NULL DEFAULT '', CHECK(end_km>=start_km))");
         db.execSQL("CREATE INDEX idx_fuel_vehicle_odo ON fuel(vehicle_id,odometer)");
         db.execSQL("CREATE INDEX idx_expenses_vehicle_date ON expenses(vehicle_id,date)");
         db.execSQL("CREATE INDEX idx_trips_vehicle_date ON trips(vehicle_id,date)");
+        createImportTables(db);
+    }
+    private static void createImportTables(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS import_vehicle_links (source_key TEXT PRIMARY KEY NOT NULL, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS imported_rows (row_key TEXT PRIMARY KEY NOT NULL, record_kind TEXT NOT NULL, vehicle_key TEXT NOT NULL, imported_at INTEGER NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion) {
-        // No schema migration needed for the first published version.
-        if (oldVersion != 1) throw new IllegalStateException("Unsupported database version");
+        if(oldVersion == 1 && newVersion >= 2) {
+            db.execSQL("ALTER TABLE vehicles ADD COLUMN unit_system INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE fuel ADD COLUMN missed_fillup INTEGER NOT NULL DEFAULT 0");
+            createImportTables(db);
+        } else throw new IllegalStateException("Unsupported database migration " + oldVersion + " to " + newVersion);
     }
 
     public static final class Vehicle {
         public final long id;
         public final String name,make,model;
-        Vehicle(long id,String name,String make,String model) { this.id=id; this.name=name; this.make=make; this.model=model; }
+        /** 0 = km / liters, 1 = miles / US gallons. Storage is always metric. */
+        public final int unitSystem;
+        Vehicle(long id,String name,String make,String model,int units) {
+            this.id=id; this.name=name; this.make=make; this.model=model; this.unitSystem=units;
+        }
     }
     public static final class Fuel {
         public final long id,vehicleId,date;
         public final double odometer,liters,cost;
-        public final boolean full;
-        Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full) {
-            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters; this.cost=cost; this.full=full;
+        public final boolean full, missed;
+        Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed) {
+            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters; this.cost=cost; this.full=full; this.missed=missed;
         }
     }
     public static final class Expense {
@@ -79,8 +91,8 @@ public final class GarageDb extends SQLiteOpenHelper {
 
     public List<Vehicle> vehicles() {
         ArrayList<Vehicle> result=new ArrayList<>();
-        try(Cursor c=getReadableDatabase().rawQuery("SELECT id,name,make,model FROM vehicles ORDER BY id DESC",null)) {
-            while(c.moveToNext()) result.add(new Vehicle(c.getLong(0),c.getString(1),c.getString(2),c.getString(3)));
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT id,name,make,model,unit_system FROM vehicles ORDER BY id DESC",null)) {
+            while(c.moveToNext()) result.add(new Vehicle(c.getLong(0),c.getString(1),c.getString(2),c.getString(3),c.getInt(4)));
         }
         return result;
     }
@@ -90,14 +102,21 @@ public final class GarageDb extends SQLiteOpenHelper {
         return getWritableDatabase().insertOrThrow("vehicles",null,v);
     }
     public void deleteVehicle(long id) {
-        getWritableDatabase().delete("vehicles","id=?",new String[]{Long.toString(id)});
+        SQLiteDatabase sql=getWritableDatabase();
+        sql.beginTransaction();
+        try {
+            // Allow re-import of a vehicle that has been explicitly deleted.
+            sql.execSQL("DELETE FROM imported_rows WHERE vehicle_key IN (SELECT source_key FROM import_vehicle_links WHERE vehicle_id=?)",new Object[]{id});
+            sql.delete("vehicles","id=?",new String[]{Long.toString(id)});
+            sql.setTransactionSuccessful();
+        } finally { sql.endTransaction(); }
     }
     public List<Fuel> fuel(long vehicleId) {
         ArrayList<Fuel> result=new ArrayList<>();
         try(Cursor c=getReadableDatabase().query("fuel",
-            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank"},
+            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup"},
             "vehicle_id=?",new String[]{Long.toString(vehicleId)},null,null,"date DESC,id DESC")) {
-            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1));
+            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1,c.getInt(7)==1));
         }
         return result;
     }
@@ -159,6 +178,8 @@ public final class GarageDb extends SQLiteOpenHelper {
         double sinceAnchor=0,kmTotal=0,litersTotal=0;
         ArrayList<Double> values=new ArrayList<>();
         for(Fuel f:ordered) {
+            // Gaps flagged by the source make this interval's economy unreliable.
+            if(f.missed) { anchor=null; sinceAnchor=0; continue; }
             if(anchor==null) {
                 if(f.full) {anchor=f;sinceAnchor=0;}
                 continue;

@@ -16,15 +16,15 @@ import java.util.Locale;
 
 public final class Ui {
     private Ui() {}
-    public static final int BG=Color.rgb(6,22,32);
-    public static final int CARD=Color.rgb(13,39,51);
-    public static final int CARD_ALT=Color.rgb(19,49,62);
-    public static final int BORDER=Color.rgb(43,78,89);
-    public static final int INK=Color.rgb(247,253,252);
-    public static final int MUTED=Color.rgb(156,183,193);
-    public static final int MINT=Color.rgb(99,240,191);
-    public static final int BLUE=Color.rgb(143,208,244);
-    public static final int ORANGE=Color.rgb(255,184,119);
+    public static final int BG=Color.rgb(8,9,12);
+    public static final int CARD=Color.rgb(22,23,29);
+    public static final int CARD_ALT=Color.rgb(34,35,43);
+    public static final int BORDER=Color.rgb(65,65,71);
+    public static final int INK=Color.rgb(246,244,234);
+    public static final int MUTED=Color.rgb(165,165,176);
+    public static final int MINT=Color.rgb(247,204,72);
+    public static final int BLUE=Color.rgb(230,212,152);
+    public static final int ORANGE=Color.rgb(220,176,91);
 
     public static int dp(Context c,float n) { return Math.round(n*c.getResources().getDisplayMetrics().density); }
     public static GradientDrawable shape(int color,Context c,int radius) {
