@@ -28,6 +28,8 @@ import java.util.Locale;
 public final class MainActivity extends Activity {
     private static final int EXPORT_REQUEST=1042;
     private static final int IMPORT_REQUEST=1043;
+    private static final int BACKUP_REQUEST=1044;
+    private static final int RESTORE_REQUEST=1045;
     private static final double KM_PER_MILE=1.609344;
     private static final double LITERS_PER_GALLON=3.785411784;
     private static final String[] TABS={"Overview","Fill-ups","Expenses","Trips","Garage"};
@@ -127,6 +129,9 @@ public final class MainActivity extends Activity {
         android.widget.Button importButton=Ui.secondary(this,"↓  Import Fuelio backup");
         importButton.setOnClickListener(w->importData());
         card.addView(importButton,Ui.below(this,10));
+        android.widget.Button restore=Ui.secondary(this,"⤒  Restore a RoadLedger backup");
+        restore.setOnClickListener(w->chooseRestore());
+        card.addView(restore,Ui.below(this,10));
         body.addView(card,Ui.below(this,15));
         note("BLACK + GOLD  ·  NO ACCOUNT  ·  NO ADS  ·  NO TRACKING");
     }
@@ -191,12 +196,13 @@ public final class MainActivity extends Activity {
         List<GarageDb.Fuel> entries=db.fuel(v.id);
         if(entries.isEmpty()) noRecords("No fill-ups yet","Your first entry is one tap away.");
         for(GarageDb.Fuel f:entries) fuelRecord(f,v);
-        note("Long-press a fill-up to delete it.");
+        note("Tap to edit a fill-up · long-press to delete.");
     }
     private void fuelRecord(GarageDb.Fuel f,GarageDb.Vehicle v) {
         LinearLayout c=record("⛽  "+fmt(f.liters/fuelFactor(v))+" "+fuelUnit(v)+"  ·  "+usd(f.cost),
             day(f.date)+"   ·   "+fmt(f.odometer/unitFactor(v))+" "+distUnit(v)
             +"   ·   "+(f.full?"Full tank":"Partial fill-up")+(f.missed?" · Missed entry":""));
+        c.setOnClickListener(view->fuelDialog(v,f));
         c.setOnLongClickListener(view->{confirm("Delete fill-up?","This record will be permanently removed.",()->db.deleteFuel(f.id));return true;});
         body.addView(c,Ui.below(this,10));
     }
@@ -210,10 +216,11 @@ public final class MainActivity extends Activity {
         for(GarageDb.Expense e:entries) {
             LinearLayout c=record(e.category+"  ·  "+usd(e.amount),
                 day(e.date)+"   ·   "+(e.odometer>0?fmt(e.odometer/unitFactor(v))+" "+distUnit(v)+"   ·   ":"")+e.note);
+            c.setOnClickListener(w->expenseDialog(v,e));
             c.setOnLongClickListener(w->{confirm("Delete expense?","This record will be permanently removed.",()->db.deleteExpense(e.id));return true;});
             body.addView(c,Ui.below(this,10));
         }
-        note("Long-press an expense to delete it.");
+        note("Tap to edit an expense · long-press to delete.");
     }
     private void tripScreen(GarageDb.Vehicle v){
         section("Trip log","Manual odometer-based trips, no GPS permission.");
@@ -224,14 +231,18 @@ public final class MainActivity extends Activity {
         if(entries.isEmpty()) noRecords("No trips yet","Enter start and end odometer readings to record distance.");
         for(GarageDb.Trip t:entries) {
             LinearLayout c=record("↗  "+fmt((t.endKm-t.startKm)/unitFactor(v))+" "+distUnit(v),day(t.date)+"   ·   "+fmt(t.startKm/unitFactor(v))+" → "+fmt(t.endKm/unitFactor(v))+" "+distUnit(v)+(t.note.isEmpty()?"":"   ·   "+t.note));
+            c.setOnClickListener(w->tripDialog(v,t));
             c.setOnLongClickListener(w->{confirm("Delete trip?","This record will be permanently removed.",()->db.deleteTrip(t.id));return true;});
             body.addView(c,Ui.below(this,10));
         }
-        note("This version does not collect or store GPS coordinates.");
+        note("Tap a trip to edit · long-press to delete. No GPS is collected.");
     }
     private void garageScreen(GarageDb.Vehicle selected){
         section("Your garage","Every vehicle in one private place.");
         addButton("＋  Add another vehicle",this::vehicleDialog);
+        android.widget.Button editVehicle=Ui.secondary(this,"✎  Edit selected vehicle");
+        editVehicle.setOnClickListener(w->vehicleDialog(selected));
+        body.addView(editVehicle,Ui.below(this,10));
         android.widget.Button importButton=Ui.secondary(this,"↓  Import from Fuelio CSV / Google Drive");
         importButton.setOnClickListener(w->importData());
         body.addView(importButton,Ui.below(this,12));
@@ -246,10 +257,17 @@ public final class MainActivity extends Activity {
             });
             body.addView(card,Ui.below(this,12));
         }
-        android.widget.Button export=Ui.secondary(this,"↓  Export your records (CSV)");
+        android.widget.Button export=Ui.secondary(this,"↓  Export summary CSV (not a restore backup)");
         export.setOnClickListener(w->exportData());
         body.addView(export,Ui.below(this,25));
-        note("Long-press a vehicle to delete it and all of its data.");
+        android.widget.Button backup=Ui.secondary(this,"⤓  Back up all RoadLedger data (.zip)");
+        backup.setOnClickListener(w->createBackup());
+        body.addView(backup,Ui.below(this,12));
+        android.widget.Button restore=Ui.secondary(this,"⤒  Restore RoadLedger backup (.zip)");
+        restore.setOnClickListener(w->chooseRestore());
+        body.addView(restore,Ui.below(this,12));
+        note("Native ZIP backup includes all vehicle data and import history. It is not encrypted; store it privately.");
+        note("Tap a vehicle to select. Edit above or long-press to delete it and its data.");
     }
 
     private void section(String title,String subtitle) {
@@ -325,7 +343,7 @@ public final class MainActivity extends Activity {
         parent.addView(t,Ui.below(this,12));
         EditText e=new EditText(this);
         e.setSingleLine(true);e.setTextSize(16);e.setHint(placeholder);
-        e.setTextColor(Color.BLACK);e.setHintTextColor(Color.GRAY);
+        e.setTextColor(Ui.INK);e.setHintTextColor(Ui.MUTED);
         if(number) e.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL|InputType.TYPE_NUMBER_FLAG_SIGNED);
         else e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         parent.addView(e,new LinearLayout.LayoutParams(-1,Ui.dp(this,50)));
@@ -338,33 +356,57 @@ public final class MainActivity extends Activity {
         if(!Double.isFinite(n))throw new IllegalArgumentException("Invalid "+field+".");
         return n;
     }
-    private void vehicleDialog() {
+    private void vehicleDialog() { vehicleDialog(null); }
+    private void vehicleDialog(GarageDb.Vehicle existing) {
         LinearLayout col=Ui.col(this);
         EditText name=field(col,"VEHICLE NAME","e.g. My Corolla",false);
         EditText make=field(col,"MAKE","Toyota (optional)",false);
         EditText model=field(col,"MODEL","Corolla (optional)",false);
-        form("Add vehicle",col,()->{
+        if(existing!=null){name.setText(existing.name);make.setText(existing.make);model.setText(existing.model);}
+        form(existing==null?"Add vehicle":"Edit vehicle",col,()->{
             String label=name.getText().toString().trim();
             if(label.isEmpty())throw new IllegalArgumentException("Vehicle name is required.");
-            selectedVehicle=db.addVehicle(label,make.getText().toString(),model.getText().toString());
+            if(existing==null)selectedVehicle=db.addVehicle(label,make.getText().toString(),model.getText().toString());
+            else db.updateVehicle(existing.id,label,make.getText().toString(),model.getText().toString());
             tab=0;
         });
     }
-    private void fuelDialog(GarageDb.Vehicle vehicle) {
+    private void fuelDialog(GarageDb.Vehicle vehicle){fuelDialog(vehicle,null);}
+    private void fuelDialog(GarageDb.Vehicle vehicle,GarageDb.Fuel existing) {
         LinearLayout col=Ui.col(this);
+        EditText date=field(col,"DATE (YYYY-MM-DD)","2026-11-10",false);
         EditText odo=field(col,"ODOMETER ("+distUnit(vehicle).toUpperCase(Locale.US)+")","e.g. 37000",true);
         EditText liters=field(col,"FUEL PURCHASED ("+fuelUnit(vehicle).toUpperCase(Locale.US)+")","e.g. 8.5",true);
         EditText cost=field(col,"TOTAL COST (USD)","e.g. 47.50",true);
         CheckBox full=new CheckBox(this);
-        full.setText("Filled tank completely");full.setChecked(true);full.setTextColor(Color.DKGRAY);
+        full.setText("Filled tank completely");full.setChecked(existing==null||existing.full);full.setTextColor(Ui.INK);
         col.addView(full,Ui.below(this,15));
-        form("New fill-up",col,()->{
-            db.addFuel(vehicle.id,System.currentTimeMillis(),val(odo,"odometer")*unitFactor(vehicle),val(liters,"fuel")*fuelFactor(vehicle),val(cost,"cost"),full.isChecked());
+        CheckBox missed=new CheckBox(this);
+        missed.setText("Prior fill-up history is missing");
+        missed.setChecked(existing!=null&&existing.missed);missed.setTextColor(Ui.INK);
+        col.addView(missed,Ui.below(this,10));
+        date.setText(iso(existing==null?System.currentTimeMillis():existing.date));
+        if(existing!=null){
+            odo.setText(Double.toString(existing.odometer/unitFactor(vehicle)));
+            liters.setText(Double.toString(existing.liters/fuelFactor(vehicle)));
+            cost.setText(Double.toString(existing.cost));
+        }
+        form(existing==null?"New fill-up":"Edit fill-up",col,()->{
+            long dateMs=editorDate(date,existing==null?0:existing.date);
+            double distance=val(odo,"odometer")*unitFactor(vehicle);
+            double qty=val(liters,"fuel")*fuelFactor(vehicle);
+            double amount=val(cost,"cost");
+            if(existing==null){
+                long id=db.addFuel(vehicle.id,dateMs,distance,qty,amount,full.isChecked());
+                if(missed.isChecked())db.updateFuel(vehicle.id,id,dateMs,distance,qty,amount,full.isChecked(),true);
+            }else db.updateFuel(vehicle.id,existing.id,dateMs,distance,qty,amount,full.isChecked(),missed.isChecked());
         });
     }
-    private void expenseDialog(GarageDb.Vehicle vehicle) {
+    private void expenseDialog(GarageDb.Vehicle vehicle){expenseDialog(vehicle,null);}
+    private void expenseDialog(GarageDb.Vehicle vehicle,GarageDb.Expense existing) {
         LinearLayout col=Ui.col(this);
-        col.addView(Ui.label(this,"CATEGORY",13,Color.DKGRAY,true),Ui.below(this,12));
+        EditText date=field(col,"DATE (YYYY-MM-DD)","2026-11-10",false);
+        col.addView(Ui.label(this,"CATEGORY",13,Ui.MUTED,true),Ui.below(this,12));
         Spinner category=new Spinner(this);
         String[] options={"Maintenance","Repairs","Insurance","Parking","Tolls","Registration","Other"};
         ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,options);
@@ -372,19 +414,64 @@ public final class MainActivity extends Activity {
         EditText amount=field(col,"AMOUNT (USD)","e.g. 89.50",true);
         EditText odo=field(col,"ODOMETER ("+distUnit(vehicle).toUpperCase(Locale.US)+", OPTIONAL)","0",true);
         EditText note=field(col,"NOTES","What was this for?",false);
-        form("New expense",col,()->{
+        date.setText(iso(existing==null?System.currentTimeMillis():existing.date));
+        if(existing!=null){
+            amount.setText(Double.toString(existing.amount));
+            odo.setText(Double.toString(existing.odometer/unitFactor(vehicle)));
+            note.setText(existing.note);
+            // Preserve imported/custom categories instead of silently replacing them.
+            boolean found=false;
+            for(int i=0;i<options.length;i++)if(options[i].equals(existing.category)){category.setSelection(i);found=true;break;}
+            if(!found){
+                String[] extended=new String[options.length+1];
+                extended[0]=existing.category;
+                System.arraycopy(options,0,extended,1,options.length);
+                options=extended;
+                category.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,options));
+            }
+        }
+        final String[] categories=options;
+        form(existing==null?"New expense":"Edit expense",col,()->{
             String km=odo.getText().toString().trim();
-            db.addExpense(vehicle.id,System.currentTimeMillis(),options[category.getSelectedItemPosition()],val(amount,"amount"),km.isEmpty()?0:Double.parseDouble(km)*unitFactor(vehicle),note.getText().toString());
+            double mileage=km.isEmpty()?0:Double.parseDouble(km)*unitFactor(vehicle);
+            long dateMs=editorDate(date,existing==null?0:existing.date);
+            String selected=categories[category.getSelectedItemPosition()];
+            if(existing==null) db.addExpense(vehicle.id,dateMs,selected,val(amount,"amount"),mileage,note.getText().toString());
+            else db.updateExpense(vehicle.id,existing.id,dateMs,selected,val(amount,"amount"),mileage,note.getText().toString());
         });
     }
-    private void tripDialog(GarageDb.Vehicle vehicle) {
+    private void tripDialog(GarageDb.Vehicle vehicle){tripDialog(vehicle,null);}
+    private void tripDialog(GarageDb.Vehicle vehicle,GarageDb.Trip existing) {
         LinearLayout col=Ui.col(this);
+        EditText date=field(col,"DATE (YYYY-MM-DD)","2026-11-10",false);
         EditText start=field(col,"START ODOMETER ("+distUnit(vehicle).toUpperCase(Locale.US)+")","e.g. 37000",true);
         EditText end=field(col,"END ODOMETER ("+distUnit(vehicle).toUpperCase(Locale.US)+")","e.g. 37025",true);
         EditText note=field(col,"TRIP PURPOSE / NOTES","e.g. Commute",false);
-        form("Record manual trip",col,()->{
-            db.addTrip(vehicle.id,System.currentTimeMillis(),val(start,"starting odometer")*unitFactor(vehicle),val(end,"ending odometer")*unitFactor(vehicle),note.getText().toString());
+        date.setText(iso(existing==null?System.currentTimeMillis():existing.date));
+        if(existing!=null){
+            start.setText(Double.toString(existing.startKm/unitFactor(vehicle)));
+            end.setText(Double.toString(existing.endKm/unitFactor(vehicle)));
+            note.setText(existing.note);
+        }
+        form(existing==null?"Record manual trip":"Edit trip",col,()->{
+            long dateMs=editorDate(date,existing==null?0:existing.date);
+            double startKm=val(start,"starting odometer")*unitFactor(vehicle);
+            double endKm=val(end,"ending odometer")*unitFactor(vehicle);
+            if(existing==null)db.addTrip(vehicle.id,dateMs,startKm,endKm,note.getText().toString());
+            else db.updateTrip(vehicle.id,existing.id,dateMs,startKm,endKm,note.getText().toString());
         });
+    }
+    private static long editorDate(EditText field,long original) throws Exception {
+        String value=field.getText().toString().trim();
+        SimpleDateFormat formatter=new SimpleDateFormat("yyyy-MM-dd",Locale.US);
+        formatter.setLenient(false);
+        java.text.ParsePosition position=new java.text.ParsePosition(0);
+        Date parsed=formatter.parse(value,position);
+        if(parsed==null||position.getIndex()!=value.length()||value.length()!=10)
+            throw new IllegalArgumentException("Enter a valid date as YYYY-MM-DD.");
+        // A record whose date was not changed must keep its original time-of-day.
+        if(original>0&&value.equals(iso(original)))return original;
+        return parsed.getTime();
     }
     private void confirm(String title,String message,Runnable action) {
         new AlertDialog.Builder(this).setTitle(title).setMessage(message)
@@ -425,6 +512,40 @@ public final class MainActivity extends Activity {
                 }
             }).show();
     }
+    private void createBackup(){
+        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("application/zip");
+        i.putExtra(Intent.EXTRA_TITLE,"roadledger-native-backup.zip");
+        try{startActivityForResult(i,BACKUP_REQUEST);}
+        catch(Exception e){toast("No file picker available.");}
+    }
+    private void chooseRestore(){
+        Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("application/zip");
+        try{startActivityForResult(i,RESTORE_REQUEST);}
+        catch(Exception e){toast("No file picker available.");}
+    }
+    private void confirmRestore(RoadLedgerBackup.Snapshot snapshot){
+        new AlertDialog.Builder(this)
+            .setTitle("Replace all RoadLedger data?")
+            .setMessage(snapshot.summary()+"\n\nExport a backup of your current records first. This action replaces them.")
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Replace all",(dialog,which)->{
+                try{
+                    RoadLedgerBackup.restore(db,snapshot);
+                    selectedVehicle=-1;tab=0;render();
+                    new AlertDialog.Builder(this).setTitle("Restore successful")
+                        .setMessage("All backed-up records have been restored.")
+                        .setPositiveButton("Done",null).show();
+                }catch(Exception e){
+                    new AlertDialog.Builder(this).setTitle("Restore failed")
+                        .setMessage("Existing data was not replaced. "+e.getMessage())
+                        .setPositiveButton("OK",null).show();
+                }
+            }).show();
+    }
     private void exportData(){
         Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -435,6 +556,24 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
         super.onActivityResult(requestCode,resultCode,data);
+        if(requestCode==BACKUP_REQUEST){
+            if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
+            try(OutputStream out=getContentResolver().openOutputStream(data.getData())){
+                RoadLedgerBackup.write(db,out);
+                toast("RoadLedger native backup saved. Store it privately.");
+            }catch(Exception e){toast("Backup failed: "+e.getMessage());}
+            return;
+        }
+        if(requestCode==RESTORE_REQUEST){
+            if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
+            try(InputStream in=getContentResolver().openInputStream(data.getData())){
+                confirmRestore(RoadLedgerBackup.read(in));
+            }catch(Exception e){
+                new AlertDialog.Builder(this).setTitle("Invalid backup")
+                    .setMessage(e.getMessage()).setPositiveButton("OK",null).show();
+            }
+            return;
+        }
         if(requestCode==IMPORT_REQUEST){
             if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
             try(InputStream in=getContentResolver().openInputStream(data.getData())){

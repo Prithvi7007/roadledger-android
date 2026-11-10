@@ -101,6 +101,43 @@ public final class GarageDb extends SQLiteOpenHelper {
         v.put("name",name.trim());v.put("make",make.trim());v.put("model",model.trim());
         return getWritableDatabase().insertOrThrow("vehicles",null,v);
     }
+    /** Record updates preserve original IDs and import provenance. */
+    public void updateVehicle(long id,String name,String make,String model) {
+        if(name==null||name.trim().isEmpty())throw new IllegalArgumentException("Vehicle name is required.");
+        ContentValues x=new ContentValues();
+        x.put("name",name.trim());x.put("make",make==null?"":make.trim());x.put("model",model==null?"":model.trim());
+        if(getWritableDatabase().update("vehicles",x,"id=?",new String[]{Long.toString(id)})!=1)
+            throw new IllegalArgumentException("Vehicle no longer exists.");
+    }
+    public void updateFuel(long vehicleId,long id,long date,double odo,double liters,double cost,boolean full,boolean missed) {
+        if(date<=0||odo<0||liters<=0||cost<0||!Double.isFinite(odo)||!Double.isFinite(liters)||!Double.isFinite(cost))
+            throw new IllegalArgumentException("Invalid fuel values.");
+        ContentValues x=new ContentValues();
+        x.put("date",date);x.put("odometer",odo);x.put("liters",liters);x.put("cost",cost);
+        x.put("full_tank",full?1:0);x.put("missed_fillup",missed?1:0);
+        if(getWritableDatabase().update("fuel",x,"id=? AND vehicle_id=?",new String[]{Long.toString(id),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Fill-up no longer exists in this vehicle.");
+    }
+    public void updateExpense(long vehicleId,long id,long date,String category,double amount,double odo,String note) {
+        if(date<=0||amount<0||odo<0||!Double.isFinite(amount)||!Double.isFinite(odo))
+            throw new IllegalArgumentException("Invalid expense values.");
+        if(category==null||category.trim().isEmpty())throw new IllegalArgumentException("Category is required.");
+        ContentValues x=new ContentValues();
+        x.put("date",date);x.put("category",category.trim());x.put("amount",amount);
+        x.put("odometer",odo);x.put("note",note==null?"":note.trim());
+        if(getWritableDatabase().update("expenses",x,"id=? AND vehicle_id=?",new String[]{Long.toString(id),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Expense no longer exists in this vehicle.");
+    }
+    public void updateTrip(long vehicleId,long id,long date,double start,double end,String note) {
+        if(date<=0||start<0||end<=start||!Double.isFinite(start)||!Double.isFinite(end))
+            throw new IllegalArgumentException("Trip end must exceed the start odometer.");
+        ContentValues x=new ContentValues();
+        x.put("date",date);x.put("start_km",start);x.put("end_km",end);
+        x.put("note",note==null?"":note.trim());
+        if(getWritableDatabase().update("trips",x,"id=? AND vehicle_id=?",new String[]{Long.toString(id),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Trip no longer exists in this vehicle.");
+    }
+
     public void deleteVehicle(long id) {
         SQLiteDatabase sql=getWritableDatabase();
         sql.beginTransaction();
