@@ -1,0 +1,23 @@
+name: RoadLedger permanently signed test APK
+on:
+  push:
+    branches: ['test-builds/roadledger-v032-signed']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-publish-test-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact signed APK checksum
+        run: sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RoadLedger-v0.3.2-PERMANENT-SIGNED-TEST-APK
+          path: RoadLedger-v0.3.2-release-signed.apk
+          if-no-files-found: error
+          retention-days: 30
