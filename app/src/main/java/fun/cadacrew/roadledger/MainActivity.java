@@ -30,6 +30,10 @@ public final class MainActivity extends Activity {
     private static final int IMPORT_REQUEST=1043;
     private static final int BACKUP_REQUEST=1044;
     private static final int RESTORE_REQUEST=1045;
+    private static final int REPORT_REQUEST=1046;
+    private static final int SOURCE_EXPORT_REQUEST=1047;
+    private long reportVehicleId=-1, reportSince=0;
+    private String archiveToExport="";
     private static final double KM_PER_MILE=1.609344;
     private static final double LITERS_PER_GALLON=3.785411784;
     private static final String[] TABS={"Home","Fuel","Insights","Service","More"};
@@ -41,9 +45,24 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         db=new GarageDb(this);
+        if(state!=null){
+            selectedVehicle=state.getLong("selectedVehicle",-1);
+            tab=state.getInt("tab",0);
+            reportVehicleId=state.getLong("reportVehicleId",-1);
+            reportSince=state.getLong("reportSince",0);
+            archiveToExport=state.getString("archiveToExport","");
+        }
         getWindow().setStatusBarColor(Ui.BG);
         getWindow().setNavigationBarColor(Ui.BG);
         render();
+    }
+    @Override protected void onSaveInstanceState(Bundle out){
+        out.putLong("selectedVehicle",selectedVehicle);
+        out.putInt("tab",tab);
+        out.putLong("reportVehicleId",reportVehicleId);
+        out.putLong("reportSince",reportSince);
+        out.putString("archiveToExport",archiveToExport);
+        super.onSaveInstanceState(out);
     }
     @Override protected void onDestroy() {
         if(db!=null) db.close();
@@ -221,6 +240,14 @@ public final class MainActivity extends Activity {
     }
     private void insightsScreen(GarageDb.Vehicle v){
         section("Vehicle insights","Costs, efficiency and trends that help you plan.");
+        android.widget.Button report=Ui.secondary(this,"↓ Export detailed vehicle report (CSV)");
+        report.setOnClickListener(w->selectReportPeriod(v));
+        body.addView(report,Ui.below(this,10));
+        GarageDb.Economy second=db.economy(v.id,2);
+        boolean hasTank2=false;for(GarageDb.Fuel f:db.fuel(v.id))if(f.tankNumber==2){hasTank2=true;break;}
+        if(hasTank2)summaryNote(Double.isNaN(second.litersPer100Km)?"Tank 2 needs full fill-ups":
+            "Tank 2: "+economyValue(v,second)+(v.unitSystem==1?" US MPG":" L / 100 km"),
+            "Calculated separately from primary tank · "+second.intervalValues.size()+" complete intervals");
         RoadLedgerAnalytics.Snapshot s=RoadLedgerAnalytics.compute(db.fuel(v.id),db.expenses(v.id),System.currentTimeMillis());
         GarageDb.Economy e=db.economy(v.id);
         LinearLayout first=Ui.row(this);
@@ -228,7 +255,8 @@ public final class MainActivity extends Activity {
         first.addView(metric("FUEL UNIT PRICE",s.averagePricePerLiter>0?usd(s.averagePricePerLiter*fuelFactor(v)):"—","Average $ / "+fuelUnit(v),Ui.BLUE),weighted(10));
         body.addView(first,Ui.below(this,18));
         LinearLayout second=Ui.row(this);
-        second.addView(metric("COST PER DISTANCE", e.totalDistanceKm>0?usd(s.totalCost/(e.totalDistanceKm/unitFactor(v))):"—","$ / "+distUnit(v)+" (completed fuel intervals)",Ui.ORANGE),weighted());
+        second.addView(metric("COST PER DISTANCE",hasTank2?"—":e.totalDistanceKm>0?usd(s.totalCost/(e.totalDistanceKm/unitFactor(v))):"—",
+            hasTank2?"Not combined across two tanks":"$ / "+distUnit(v)+" (completed fuel intervals)",Ui.ORANGE),weighted());
         second.addView(metric("LAST 12 MONTHS",usd(s.last12MonthsCost),"Fuel + expenses",Ui.MINT),weighted(10));
         body.addView(second,Ui.below(this,10));
         LinearLayout spending=Ui.card(this);
@@ -340,6 +368,12 @@ public final class MainActivity extends Activity {
         summaryNote(Double.isNaN(e.litersPer100Km)?"Fuel economy pending":economyValue(v,e)+(v.unitSystem==1?" US MPG":" L / 100 km"),
             e.intervalValues.isEmpty()?"Add two full-tank fill-ups with increasing odometer readings.":"Weighted across "+e.intervalValues.size()+" completed full-to-full intervals.");
         List<GarageDb.Fuel> entries=db.fuel(v.id);
+        int secondary=0;for(GarageDb.Fuel f:entries)if(f.tankNumber==2)secondary++;
+        if(secondary>0){
+            GarageDb.Economy second=db.economy(v.id,2);
+            summaryNote(Double.isNaN(second.litersPer100Km)?"Tank 2 economy pending":"Tank 2: "+economyValue(v,second)+(v.unitSystem==1?" US MPG":" L / 100 km"),
+                secondary+" tank 2 fill-ups · "+second.intervalValues.size()+" complete intervals");
+        }
         if(entries.isEmpty()) noRecords("No fill-ups yet","Your first entry is one tap away.");
         for(GarageDb.Fuel f:entries) fuelRecord(f,v);
         note("Tap to edit a fill-up · long-press to delete.");
@@ -347,7 +381,7 @@ public final class MainActivity extends Activity {
     private void fuelRecord(GarageDb.Fuel f,GarageDb.Vehicle v) {
         LinearLayout c=record("⛽  "+fmt(f.liters/fuelFactor(v))+" "+fuelUnit(v)+"  ·  "+usd(f.cost),
             day(f.date)+"   ·   "+fmt(f.odometer/unitFactor(v))+" "+distUnit(v)
-            +"   ·   "+(f.full?"Full tank":"Partial fill-up")+(f.missed?" · Missed entry":"")+(f.stationId>0?" · "+db.stationName(f.stationId):""));
+            +"   ·   Tank "+f.tankNumber+" · "+(f.full?"Full tank":"Partial fill-up")+(f.missed?" · Missed entry":"")+(f.stationId>0?" · "+db.stationName(f.stationId):""));
         c.setOnClickListener(view->fuelDialog(v,f));
         c.setOnLongClickListener(view->{confirm("Delete fill-up?","This record will be permanently removed.",()->db.deleteFuel(f.id));return true;});
         body.addView(c,Ui.below(this,10));
@@ -417,7 +451,13 @@ public final class MainActivity extends Activity {
         body.addView(restore,Ui.below(this,12));
         stationSection(selected);
         categorySection(selected);
-        note("Native ZIP backup includes vehicles, import history, stations, categories and service schedules. It is not encrypted; store it privately.");
+        if(db.archivedFuelioFiles()>0){
+            android.widget.Button original=Ui.secondary(this,"↓  Export preserved original Fuelio CSV");
+            original.setOnClickListener(w->chooseOriginalExport());
+            body.addView(original,Ui.below(this,12));
+        }
+        note("Raw source preservation: "+db.archivedFuelioFiles()+" original Fuelio CSV export(s) safely archived offline. Full source bytes are included in your RoadLedger backup.");
+        note("Native ZIP backup includes fuel tanks, original imports, stations, categories and service schedules. It is NOT encrypted; store it privately.");
         note("Tap a vehicle to select. Edit above or long-press to delete it and its data.");
     }
 
@@ -537,6 +577,12 @@ public final class MainActivity extends Activity {
         missed.setChecked(existing!=null&&existing.missed);missed.setTextColor(Ui.INK);
         col.addView(missed,Ui.below(this,10));
         // Associate optional saved station, preserving the choice when editing a fill-up.
+        col.addView(Ui.label(this,"FUEL TANK",13,Ui.MUTED,true),Ui.below(this,14));
+        Spinner tank=new Spinner(this);
+        tank.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
+            new String[]{"Tank 1 · Primary","Tank 2 · Secondary"}));
+        tank.setSelection(existing!=null&&existing.tankNumber==2?1:0);
+        col.addView(tank,Ui.below(this,4));
         List<GarageDb.Station> stations=db.stations(vehicle.id);
         String[] stationLabels=new String[stations.size()+1];
         stationLabels[0]="Unspecified station";
@@ -565,9 +611,11 @@ public final class MainActivity extends Activity {
                 long id=db.addFuel(vehicle.id,dateMs,distance,qty,amount,full.isChecked());
                 if(missed.isChecked())db.updateFuel(vehicle.id,id,dateMs,distance,qty,amount,full.isChecked(),true);
                 db.setFuelStation(vehicle.id,id,station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id);
+                db.setFuelTank(vehicle.id,id,tank.getSelectedItemPosition()+1);
             }else {
                 db.updateFuel(vehicle.id,existing.id,dateMs,distance,qty,amount,full.isChecked(),missed.isChecked());
                 db.setFuelStation(vehicle.id,existing.id,station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id);
+                db.setFuelTank(vehicle.id,existing.id,tank.getSelectedItemPosition()+1);
             }
         });
     }
@@ -715,6 +763,42 @@ public final class MainActivity extends Activity {
                 }
             }).show();
     }
+    private void chooseOriginalExport(){
+        List<GarageDb.ArchivedSource> sources=db.archivedSources();
+        if(sources.isEmpty()){toast("No original CSV is archived.");return;}
+        String[] labels=new String[sources.size()];
+        for(int i=0;i<sources.size();i++){
+            labels[i]=sources.get(i).filename+" · "+sources.get(i).sha256.substring(0,8);
+        }
+        new AlertDialog.Builder(this).setTitle("Export original Fuelio CSV")
+            .setItems(labels,(dialog,which)->{
+                archiveToExport=sources.get(which).sha256;
+                Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("text/csv");
+                intent.putExtra(Intent.EXTRA_TITLE,"fuelio-preserved-original.csv");
+                try{startActivityForResult(intent,SOURCE_EXPORT_REQUEST);}
+                catch(Exception e){toast("No document picker available.");}
+            }).show();
+    }
+    private void selectReportPeriod(GarageDb.Vehicle vehicle){
+        new AlertDialog.Builder(this).setTitle("Vehicle report period")
+            .setItems(new String[]{"All history","Last 12 months"},(dlg,option)->{
+                reportVehicleId=vehicle.id;
+                if(option==0)reportSince=0;
+                else{
+                    java.util.Calendar c=java.util.Calendar.getInstance();
+                    c.add(java.util.Calendar.MONTH,-12);
+                    reportSince=c.getTimeInMillis();
+                }
+                Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("text/csv");
+                intent.putExtra(Intent.EXTRA_TITLE,"roadledger-detailed-report.csv");
+                try{startActivityForResult(intent,REPORT_REQUEST);}
+                catch(Exception e){toast("No report destination available.");}
+            }).show();
+    }
     private void exportData(){
         Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -725,6 +809,23 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
         super.onActivityResult(requestCode,resultCode,data);
+        if(requestCode==SOURCE_EXPORT_REQUEST){
+            if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
+            try(OutputStream out=getContentResolver().openOutputStream(data.getData())){
+                byte[] original=RoadLedgerSourceArchive.decodeVerified(db.archivePayloadBase64(archiveToExport),archiveToExport);
+                out.write(original);
+                toast("Original Fuelio CSV saved without modifying its content.");
+            }catch(Exception e){toast("Original CSV export failed: "+e.getMessage());}
+            return;
+        }
+        if(requestCode==REPORT_REQUEST){
+            if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
+            try(OutputStream out=getContentResolver().openOutputStream(data.getData())){
+                RoadLedgerReport.write(db,reportVehicleId,reportSince,System.currentTimeMillis(),out);
+                toast("Vehicle report exported.");
+            }catch(Exception e){toast("Report failed: "+e.getMessage());}
+            return;
+        }
         if(requestCode==BACKUP_REQUEST){
             if(resultCode!=RESULT_OK||data==null||data.getData()==null)return;
             try(OutputStream out=getContentResolver().openOutputStream(data.getData())){

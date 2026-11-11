@@ -35,7 +35,7 @@ public final class FuelioImport {
 
     static final class Fuel {
         long date; double odometerKm,liters,cost;
-        boolean full,missed; String key;
+        boolean full,missed; String key; int tankNumber=1;
     }
     static final class Expense {
         long date; double odometerKm,amount;
@@ -53,8 +53,19 @@ public final class FuelioImport {
         final List<Expense> expenses=new ArrayList<>();
         final List<Trip> trips=new ArrayList<>();
     }
+    public static final class Diagnostic {
+        public final int rowNumber;
+        public final String section,message;
+        Diagnostic(int rowNumber,String section,String message){
+            this.rowNumber=rowNumber;this.section=section;this.message=message;
+        }
+    }
     public static final class Preview {
         public final List<Vehicle> vehicles=new ArrayList<>();
+        public final List<Diagnostic> issues=new ArrayList<>();
+        public byte[] sourceBytes;
+        public String sourceName="Fuelio CSV", archiveSha256="";
+        public int inspectedRows;
         public int skipped,missed,stations,pictures,otherSections;
         public int fuels(){int count=0;for(Vehicle v:vehicles)count+=v.fuels.size();return count;}
         public int expenses(){int count=0;for(Vehicle v:vehicles)count+=v.expenses.size();return count;}
@@ -69,9 +80,21 @@ public final class FuelioImport {
                 +(stations>0?stations+" favorite stations are not imported yet.\n":"")
                 +(pictures>0?pictures+" picture references are not imported yet.\n":"")
                 +(skipped>0?skipped+" unsupported or invalid rows were skipped.\n":"")
+                +"\nThe complete original CSV will also be preserved in RoadLedger's local native backup.\n"
+                +(issues.isEmpty()?"":FuelioImport.issueSummary(this))
                 +"Existing RoadLedger data will not be replaced. "
                 +"Prices are assumed to be USD; check your source currency.";
         }
+    }
+    // Surface actionable line numbers; the full source is retained even for unsupported columns.
+    private static String issueSummary(Preview p){
+        StringBuilder s=new StringBuilder("Import issues (first 5):\n");
+        for(int n=0;n<Math.min(5,p.issues.size());n++){
+            Diagnostic x=p.issues.get(n);
+            s.append("Line ").append(x.rowNumber).append(" [").append(x.section).append("]: ")
+                .append(x.message).append('\n');
+        }
+        return s.toString();
     }
     public static final class Outcome {
         public int vehicles,fuels,expenses,trips,duplicates;
@@ -98,11 +121,16 @@ public final class FuelioImport {
             throw new IOException("Choose a Fuelio CSV export, not a ZIP archive.");
         List<List<String>> rows=csvRows(data);
         Preview preview=new Preview();
+        preview.sourceBytes=data;
+        preview.sourceName=fileName==null?"Fuelio CSV":fileName;
+        preview.archiveSha256=RoadLedgerSourceArchive.sha256(data);
         Vehicle current=null;
         String section="";
         Map<String,Integer> header=null;
         boolean nextIsHeader=false;
+        int rowNumber=0;
         for(List<String> row:rows) {
+            rowNumber++;preview.inspectedRows++;
             if(row.isEmpty())continue;
             String first=row.get(0).trim();
             if(first.length()>0&&first.charAt(0)==0xFEFF)first=first.substring(1);
@@ -133,17 +161,17 @@ public final class FuelioImport {
                         break;
                     }
                     case "log":
-                        if(current==null){preview.skipped++;break;}
+                        if(current==null){preview.skipped++;preview.issues.add(new Diagnostic(rowNumber,section,"No preceding vehicle section"));break;}
                         fuel(row,header,current,preview);break;
                     case "costcategories":
                         if(current!=null)current.categories.put(
                             cell(row,header,"costtypeid"),cell(row,header,"name"));
                         break;
                     case "costs":
-                        if(current==null){preview.skipped++;break;}
+                        if(current==null){preview.skipped++;preview.issues.add(new Diagnostic(rowNumber,section,"No preceding vehicle section"));break;}
                         expense(row,header,current,preview);break;
                     case "triplog":
-                        if(current==null){preview.skipped++;break;}
+                        if(current==null){preview.skipped++;preview.issues.add(new Diagnostic(rowNumber,section,"No preceding vehicle section"));break;}
                         trip(row,header,current,preview);break;
                     case "favstations":preview.stations++;break;
                     case "pictures":preview.pictures++;break;
@@ -151,6 +179,7 @@ public final class FuelioImport {
                 }
             }catch(IllegalArgumentException e){
                 preview.skipped++;
+                preview.issues.add(new Diagnostic(rowNumber,section,e.getMessage()==null?"Invalid record":e.getMessage()));
             }
         }
         if(preview.vehicles.isEmpty())throw new IOException(
@@ -175,6 +204,12 @@ public final class FuelioImport {
         else if(v.fuelUnit==2)f.liters*=4.54609;
         else if(v.fuelUnit!=0)throw new IllegalArgumentException("Unsupported fuel");
         f.cost=optional(cell(row,h,"priceoptional"),0);
+        String tank=cell(row,h,"tanknumber");
+        if(tank.isEmpty())tank=cell(row,h,"tank");
+        int importedTank=integer(tank,1);
+        if(importedTank<0||importedTank>2)
+            throw new IllegalArgumentException("Unsupported tank number "+importedTank);
+        f.tankNumber=importedTank==2?2:1;
         String full=cell(row,h,"full").toLowerCase(Locale.ROOT);
         f.full="1".equals(full)||"2".equals(full)||"yes".equals(full)||"true".equals(full);
         String missed=cell(row,h,"missed").toLowerCase(Locale.ROOT);
@@ -361,6 +396,7 @@ public final class FuelioImport {
                     x.put("odometer",f.odometerKm);x.put("liters",f.liters);
                     x.put("cost",f.cost);x.put("full_tank",f.full?1:0);
                     x.put("missed_fillup",f.missed?1:0);
+                    x.put("tank_number",f.tankNumber);
                     db.insertOrThrow("fuel",null,x);
                     result.fuels++;
                 }
@@ -381,6 +417,24 @@ public final class FuelioImport {
                     x.put("note",t.note);
                     db.insertOrThrow("trips",null,x);
                     result.trips++;
+                }
+            }
+            // Preserve the original exported file verbatim, including all columns
+            // and unsupported sections, in the SAME import transaction.
+            ContentValues archived=new ContentValues();
+            archived.put("sha256",preview.archiveSha256);
+            archived.put("source_name",preview.sourceName);
+            archived.put("payload_base64",RoadLedgerSourceArchive.encode(preview.sourceBytes));
+            archived.put("imported_at",System.currentTimeMillis());
+            boolean fresh=db.insertWithOnConflict("fuelio_archives",null,archived,SQLiteDatabase.CONFLICT_IGNORE)!=-1;
+            if(fresh){
+                for(Diagnostic issue:preview.issues){
+                    ContentValues warning=new ContentValues();
+                    warning.put("archive_sha256",preview.archiveSha256);
+                    warning.put("row_number",issue.rowNumber);
+                    warning.put("section",issue.section);
+                    warning.put("message",issue.message);
+                    db.insertOrThrow("import_diagnostics",null,warning);
                 }
             }
             db.setTransactionSuccessful();

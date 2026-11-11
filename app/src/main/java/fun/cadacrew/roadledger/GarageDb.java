@@ -12,7 +12,7 @@ import java.util.List;
 
 public final class GarageDb extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "roadledger.db";
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
 
     public GarageDb(Context context) {
         this(context, DATABASE_NAME);
@@ -38,6 +38,7 @@ public final class GarageDb extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX idx_trips_vehicle_date ON trips(vehicle_id,date)");
         createImportTables(db);
         createProductTables(db);
+        createV05Tables(db);
     }
     private static void createImportTables(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS import_vehicle_links (source_key TEXT PRIMARY KEY NOT NULL, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE)");
@@ -51,6 +52,14 @@ public final class GarageDb extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX idx_services_vehicle ON service_items(vehicle_id,completed,due_date)");
         db.execSQL("CREATE TABLE expense_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, name TEXT NOT NULL, UNIQUE(vehicle_id,name))");
     }
+    private static void createV05Tables(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE fuel ADD COLUMN tank_number INTEGER NOT NULL DEFAULT 1 CHECK(tank_number IN (1,2))");
+        db.execSQL("CREATE INDEX idx_fuel_vehicle_tank_odo ON fuel(vehicle_id,tank_number,odometer)");
+        // A verbatim, offline archive of the user's *own exported CSV* prevents loss of
+        // source fields RoadLedger cannot yet interpret. Only local database/backup.
+        db.execSQL("CREATE TABLE fuelio_archives (sha256 TEXT PRIMARY KEY NOT NULL, source_name TEXT NOT NULL, payload_base64 TEXT NOT NULL, imported_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE import_diagnostics (id INTEGER PRIMARY KEY AUTOINCREMENT, archive_sha256 TEXT NOT NULL REFERENCES fuelio_archives(sha256) ON DELETE CASCADE, row_number INTEGER NOT NULL, section TEXT NOT NULL, message TEXT NOT NULL)");
+    }
     @Override public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion) {
         if(oldVersion<1 || oldVersion>newVersion || newVersion!=VERSION)
             throw new IllegalStateException("Unsupported database migration " + oldVersion + " to " + newVersion);
@@ -60,6 +69,7 @@ public final class GarageDb extends SQLiteOpenHelper {
             createImportTables(db);
         }
         if(oldVersion<3) createProductTables(db);
+        if(oldVersion<4) createV05Tables(db);
     }
 
     public static final class Vehicle {
@@ -76,8 +86,12 @@ public final class GarageDb extends SQLiteOpenHelper {
         public final double odometer,liters,cost;
         public final boolean full, missed;
         public final long stationId;
+        public final int tankNumber;
         Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed,long stationId) {
-            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters; this.cost=cost; this.full=full; this.missed=missed; this.stationId=stationId;
+            this(id,vehicleId,date,odo,liters,cost,full,missed,stationId,1);
+        }
+        Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed,long stationId,int tankNumber) {
+            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters; this.cost=cost; this.full=full; this.missed=missed; this.stationId=stationId; this.tankNumber=tankNumber;
         }
     }
     public static final class Expense {
@@ -169,9 +183,9 @@ public final class GarageDb extends SQLiteOpenHelper {
     public List<Fuel> fuel(long vehicleId) {
         ArrayList<Fuel> result=new ArrayList<>();
         try(Cursor c=getReadableDatabase().query("fuel",
-            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id"},
+            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id","tank_number"},
             "vehicle_id=?",new String[]{Long.toString(vehicleId)},null,null,"date DESC,id DESC")) {
-            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1,c.getInt(7)==1,c.getLong(8)));
+            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1,c.getInt(7)==1,c.getLong(8),c.getInt(9)));
         }
         return result;
     }
@@ -180,6 +194,38 @@ public final class GarageDb extends SQLiteOpenHelper {
         ContentValues v=new ContentValues();v.put("vehicle_id",vehicleId);v.put("date",date);v.put("odometer",odo);
         v.put("liters",liters);v.put("cost",cost);v.put("full_tank",full?1:0);
         return getWritableDatabase().insertOrThrow("fuel",null,v);
+    }
+    /** Changes tank association without changing date, amount, ID or import GUID. */
+    public void setFuelTank(long vehicleId,long fuelId,int tank) {
+        if(tank!=1&&tank!=2)throw new IllegalArgumentException("Tank must be 1 or 2.");
+        ContentValues x=new ContentValues();x.put("tank_number",tank);
+        if(getWritableDatabase().update("fuel",x,"id=? AND vehicle_id=?",
+            new String[]{Long.toString(fuelId),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Fill-up could not be found.");
+    }
+    public int archivedFuelioFiles(){
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT COUNT(*) FROM fuelio_archives",null)){
+            return c.moveToFirst()?c.getInt(0):0;
+        }
+    }
+    public static final class ArchivedSource {
+        public final String sha256,filename;
+        ArchivedSource(String sha,String name){sha256=sha;filename=name;}
+    }
+    public List<ArchivedSource> archivedSources(){
+        ArrayList<ArchivedSource> result=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT sha256,source_name FROM fuelio_archives ORDER BY imported_at DESC",null)){
+            while(c.moveToNext())result.add(new ArchivedSource(c.getString(0),c.getString(1)));
+        }
+        return result;
+    }
+    public String archivePayloadBase64(String sha){
+        try(Cursor c=getReadableDatabase().rawQuery(
+            "SELECT payload_base64 FROM fuelio_archives WHERE sha256=?",new String[]{sha})){
+            if(!c.moveToFirst())throw new IllegalArgumentException("Archived source not found");
+            return c.getString(0);
+        }
     }
     public void deleteFuel(long id) {
         getWritableDatabase().delete("fuel","id=?",new String[]{Long.toString(id)});
@@ -328,37 +374,16 @@ public final class GarageDb extends SQLiteOpenHelper {
         // Existing expense records retain the category label to avoid data loss.
         getWritableDatabase().delete("expense_categories","vehicle_id=? AND name=?",new String[]{Long.toString(vehicleId),name});
     }
-    /**
-     * Independent, conservative full-to-full economy calculation.
-     * The starting full fill-up is excluded from fuel consumed over the next
-     * interval; partial purchases between consecutive full fill-ups are included.
-     */
-    public Economy economy(long vehicleId) {
-        List<Fuel> ordered=new ArrayList<>(fuel(vehicleId));
-        ordered.sort(Comparator.comparingDouble((Fuel f)->f.odometer).thenComparingLong(f->f.date).thenComparingLong(f->f.id));
-        Fuel anchor=null;
-        double sinceAnchor=0,kmTotal=0,litersTotal=0;
-        ArrayList<Double> values=new ArrayList<>();
-        for(Fuel f:ordered) {
-            // Gaps flagged by the source make this interval's economy unreliable.
-            if(f.missed) { anchor=null; sinceAnchor=0; continue; }
-            if(anchor==null) {
-                if(f.full) {anchor=f;sinceAnchor=0;}
-                continue;
-            }
-            if(f.odometer<=anchor.odometer) continue;
-            sinceAnchor+=f.liters;
-            if(f.full) {
-                double km=f.odometer-anchor.odometer;
-                if(km>0.1 && sinceAnchor>0) {
-                    kmTotal+=km;
-                    litersTotal+=sinceAnchor;
-                    values.add(100d*sinceAnchor/km);
-                }
-                anchor=f;
-                sinceAnchor=0;
-            }
+    public Economy economy(long vehicleId) {return economy(vehicleId,1);}
+    public Economy economy(long vehicleId,int tank) {
+        List<RoadLedgerFuelMath.Fill> records=new ArrayList<>();
+        for(Fuel x:fuel(vehicleId)){
+            records.add(new RoadLedgerFuelMath.Fill(x.id,x.date,x.tankNumber,x.odometer,x.liters,x.cost,x.full,x.missed));
         }
-        return new Economy(kmTotal,litersTotal,values);
+        RoadLedgerFuelMath.Result result=RoadLedgerFuelMath.calculate(records,tank);
+        List<Double> values=new ArrayList<>();
+        for(RoadLedgerFuelMath.Interval interval:result.intervals)values.add(interval.litersPer100Km);
+        return new Economy(result.distanceKm,result.consumedLiters,values);
     }
+
 }
