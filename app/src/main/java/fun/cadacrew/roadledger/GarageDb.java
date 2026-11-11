@@ -15,7 +15,12 @@ public final class GarageDb extends SQLiteOpenHelper {
     private static final int VERSION = 2;
 
     public GarageDb(Context context) {
-        super(context, DATABASE_NAME, null, VERSION);
+        this(context, DATABASE_NAME);
+    }
+
+    // Only instrumentation tests use an isolated database name.
+    GarageDb(Context context, String databaseName) {
+        super(context, databaseName, null, VERSION);
     }
 
     @Override public void onConfigure(SQLiteDatabase db) {
