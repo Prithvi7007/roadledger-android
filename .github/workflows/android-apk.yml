@@ -3,7 +3,7 @@
 name: RoadLedger Android APK
 on:
   push:
-    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests']
+    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests', 'feature/roadledger-v032-stable-signing']
   pull_request:
   workflow_dispatch:
 
@@ -31,6 +31,15 @@ jobs:
           gradle-version: '8.9'
       - name: Compile installable debug APK
         run: gradle --no-daemon :app:assembleDebug
+      - name: Compile unsigned release APK for isolated signing
+        run: gradle --no-daemon :app:assembleRelease
+      - name: Upload UNSIGNED release (not installable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoadLedger-v0.3.2-unsigned-release-DO-NOT-INSTALL
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: RoadLedger-v0.3-dev-debug-apk
@@ -69,6 +78,45 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RoadLedger-v0.3.1-emulator-test-results
+          path: |
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/connected/
+          if-no-files-found: warn
+          retention-days: 30
+
+  emulator-upgrade-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Enable Android emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise in-place v0.3.1 to v0.3.2 upgrade with synthetic records
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: bash scripts/ci-upgrade-test.sh
+      - name: Upload upgrade test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoadLedger-v0.3.2-upgrade-test-results
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
