@@ -254,11 +254,11 @@ public final class MainActivity extends Activity {
         first.addView(metric("ALL-TIME COST",usd(s.totalCost),"Fuel and non-fuel",Ui.MINT),weighted());
         first.addView(metric("FUEL UNIT PRICE",s.averagePricePerLiter>0?usd(s.averagePricePerLiter*fuelFactor(v)):"—","Average $ / "+fuelUnit(v),Ui.BLUE),weighted(10));
         body.addView(first,Ui.below(this,18));
-        LinearLayout second=Ui.row(this);
-        second.addView(metric("COST PER DISTANCE",hasTank2?"—":e.totalDistanceKm>0?usd(s.totalCost/(e.totalDistanceKm/unitFactor(v))):"—",
+        LinearLayout secondRow=Ui.row(this);
+        secondRow.addView(metric("COST PER DISTANCE",hasTank2?"—":e.totalDistanceKm>0?usd(s.totalCost/(e.totalDistanceKm/unitFactor(v))):"—",
             hasTank2?"Not combined across two tanks":"$ / "+distUnit(v)+" (completed fuel intervals)",Ui.ORANGE),weighted());
-        second.addView(metric("LAST 12 MONTHS",usd(s.last12MonthsCost),"Fuel + expenses",Ui.MINT),weighted(10));
-        body.addView(second,Ui.below(this,10));
+        secondRow.addView(metric("LAST 12 MONTHS",usd(s.last12MonthsCost),"Fuel + expenses",Ui.MINT),weighted(10));
+        body.addView(secondRow,Ui.below(this,10));
         LinearLayout spending=Ui.card(this);
         spending.addView(Ui.label(this,"Monthly spending",19,Ui.INK,true));
         spending.addView(Ui.label(this,"Fuel and other costs · last 6 calendar months",12,Ui.MUTED,false),Ui.below(this,5));
