@@ -32,7 +32,7 @@ public final class MainActivity extends Activity {
     private static final int RESTORE_REQUEST=1045;
     private static final double KM_PER_MILE=1.609344;
     private static final double LITERS_PER_GALLON=3.785411784;
-    private static final String[] TABS={"Overview","Fill-ups","Expenses","Trips","Garage"};
+    private static final String[] TABS={"Home","Fuel","Insights","Service","More"};
     private GarageDb db;
     private long selectedVehicle=-1;
     private int tab=0;
@@ -90,8 +90,11 @@ public final class MainActivity extends Activity {
         if(vehicle==null) emptyScreen();
         else if(tab==0) overview(vehicle);
         else if(tab==1) fuelScreen(vehicle);
-        else if(tab==2) expenseScreen(vehicle);
-        else if(tab==3) tripScreen(vehicle);
+        else if(tab==2) insightsScreen(vehicle);
+        else if(tab==3) serviceScreen(vehicle);
+        else if(tab==4) moreScreen(vehicle);
+        else if(tab==5) expenseScreen(vehicle);
+        else if(tab==6) tripScreen(vehicle);
         else garageScreen(vehicle);
         bottomNavigation(shell);
         setContentView(shell);
@@ -100,19 +103,20 @@ public final class MainActivity extends Activity {
         LinearLayout nav=Ui.row(this);
         nav.setPadding(Ui.dp(this,7),Ui.dp(this,10),Ui.dp(this,7),Ui.dp(this,12));
         nav.setBackgroundColor(Ui.CARD);
-        String[] icons={"◉","◈","▣","⌁","▦"};
+        String[] icons={"◉","◈","▥","⌁","▦"};
         for(int i=0;i<TABS.length;i++){
             final int target=i;
             LinearLayout cell=Ui.col(this);
             cell.setGravity(Gravity.CENTER);
-            TextView icon=Ui.label(this,icons[i],22,tab==i?Ui.MINT:Ui.MUTED,true);
+            boolean selected=(tab==i)||(i==4&&tab>4);
+            TextView icon=Ui.label(this,icons[i],22,selected?Ui.MINT:Ui.MUTED,true);
             icon.setGravity(Gravity.CENTER);
-            TextView label=Ui.label(this,TABS[i],10,tab==i?Ui.MINT:Ui.MUTED,tab==i);
+            TextView label=Ui.label(this,TABS[i],10,selected?Ui.MINT:Ui.MUTED,selected);
             label.setGravity(Gravity.CENTER);
             cell.addView(icon);
             cell.addView(label);
             cell.setPadding(0,Ui.dp(this,3),0,Ui.dp(this,3));
-            if(tab==i) cell.setBackground(Ui.shape(Ui.CARD_ALT,this,14));
+            if(selected) cell.setBackground(Ui.shape(Ui.CARD_ALT,this,14));
             cell.setOnClickListener(v->{tab=target;render();});
             nav.addView(cell,new LinearLayout.LayoutParams(0,Ui.dp(this,59),1));
         }
@@ -173,6 +177,7 @@ public final class MainActivity extends Activity {
         costButton.setOnClickListener(w->expenseDialog(v));
         actions.addView(costButton,weighted(12));
         body.addView(actions,Ui.below(this,18));
+        quickLinks();
 
         if(!fuel.isEmpty()){
             body.addView(Ui.label(this,"RECENT ACTIVITY",12,Ui.MUTED,true),Ui.below(this,25));
@@ -186,6 +191,147 @@ public final class MainActivity extends Activity {
         importBackup.setOnClickListener(w->importData());
         body.addView(importBackup,Ui.below(this,12));
         note("Black + gold mode  ·  Your data stays on your device.");
+    }
+    private void jump(int page){tab=page;render();}
+    private void quickLinks(){
+        body.addView(Ui.label(this,"EXPLORE YOUR VEHICLE",12,Ui.MUTED,true),Ui.below(this,24));
+        LinearLayout first=Ui.row(this);
+        android.widget.Button insights=Ui.secondary(this,"◈  Insights");
+        insights.setOnClickListener(w->jump(2));first.addView(insights,weighted());
+        android.widget.Button service=Ui.secondary(this,"⌁  Service" );
+        service.setOnClickListener(w->jump(3));first.addView(service,weighted(10));
+        body.addView(first,Ui.below(this,9));
+        LinearLayout second=Ui.row(this);
+        android.widget.Button expenses=Ui.secondary(this,"▤  Expenses");
+        expenses.setOnClickListener(w->jump(5));second.addView(expenses,weighted());
+        android.widget.Button trips=Ui.secondary(this,"↗  Trips");
+        trips.setOnClickListener(w->jump(6));second.addView(trips,weighted(10));
+        body.addView(second,Ui.below(this,9));
+    }
+    private void moreScreen(GarageDb.Vehicle v){
+        section("Explore", "Your records, maintenance, stations and data tools.");
+        addButton("▤  Expense history",()->jump(5));
+        addButton("↗  Trip history",()->jump(6));
+        addButton("▦  Vehicles, stations and backups",()->jump(7));
+        addButton("↓  Import Fuelio data",this::importData);
+        LinearLayout card=Ui.card(this);
+        card.addView(Ui.label(this,"YOUR DATA STAYS LOCAL",13,Ui.MINT,true));
+        card.addView(Ui.label(this,"Use Garage to manage fuel stations, custom expense categories, native ZIP backups, and restoration.",13,Ui.MUTED,false),Ui.below(this,6));
+        body.addView(card,Ui.below(this,17));
+    }
+    private void insightsScreen(GarageDb.Vehicle v){
+        section("Vehicle insights","Costs, efficiency and trends that help you plan.");
+        RoadLedgerAnalytics.Snapshot s=RoadLedgerAnalytics.compute(db.fuel(v.id),db.expenses(v.id),System.currentTimeMillis());
+        GarageDb.Economy e=db.economy(v.id);
+        LinearLayout first=Ui.row(this);
+        first.addView(metric("ALL-TIME COST",usd(s.totalCost),"Fuel and non-fuel",Ui.MINT),weighted());
+        first.addView(metric("FUEL UNIT PRICE",s.averagePricePerLiter>0?usd(s.averagePricePerLiter*fuelFactor(v)):"—","Average $ / "+fuelUnit(v),Ui.BLUE),weighted(10));
+        body.addView(first,Ui.below(this,18));
+        LinearLayout second=Ui.row(this);
+        second.addView(metric("COST PER DISTANCE", e.totalDistanceKm>0?usd(s.totalCost/(e.totalDistanceKm/unitFactor(v))):"—","$ / "+distUnit(v)+" (completed fuel intervals)",Ui.ORANGE),weighted());
+        second.addView(metric("LAST 12 MONTHS",usd(s.last12MonthsCost),"Fuel + expenses",Ui.MINT),weighted(10));
+        body.addView(second,Ui.below(this,10));
+        LinearLayout spending=Ui.card(this);
+        spending.addView(Ui.label(this,"Monthly spending",19,Ui.INK,true));
+        spending.addView(Ui.label(this,"Fuel and other costs · last 6 calendar months",12,Ui.MUTED,false),Ui.below(this,5));
+        List<Double> monthly=new ArrayList<>();
+        for(double number:s.sixMonthSpend)monthly.add(number);
+        spending.addView(new Ui.EconomyChart(this,monthly),Ui.below(this,8));
+        body.addView(spending,Ui.below(this,17));
+        LinearLayout breakdown=Ui.card(this);
+        breakdown.addView(Ui.label(this,"Where your money goes",18,Ui.INK,true));
+        breakdown.addView(Ui.label(this,"Fuel  ·  "+usd(s.totalFuelCost),15,Ui.MINT,true),Ui.below(this,11));
+        for(java.util.Map.Entry<String,Double> item:s.costByCategory.entrySet()){
+            breakdown.addView(Ui.label(this,item.getKey()+"  ·  "+usd(item.getValue()),13,Ui.INK,false),Ui.below(this,7));
+        }
+        if(s.costByCategory.isEmpty())breakdown.addView(Ui.label(this,"No expense categories yet",13,Ui.MUTED,false),Ui.below(this,8));
+        body.addView(breakdown,Ui.below(this,16));
+        LinearLayout recent=Ui.card(this);
+        recent.addView(Ui.label(this,"Recent fill-up prices",18,Ui.INK,true));
+        int limit=0;
+        for(GarageDb.Fuel f:db.fuel(v.id)){
+            if(limit++>=6)break;
+            recent.addView(Ui.label(this,day(f.date)+"   "+usd(f.cost/(f.liters/fuelFactor(v)))+" / "+fuelUnit(v),13,Ui.INK,false),Ui.below(this,8));
+        }
+        if(limit==0)recent.addView(Ui.label(this,"Add fill-ups to see price history",13,Ui.MUTED,false),Ui.below(this,9));
+        body.addView(recent,Ui.below(this,16));
+        note("All-time cost per distance uses completed full-to-full fuel intervals as its denominator. It is not a lifecycle vehicle-cost estimate.");
+    }
+    private void serviceScreen(GarageDb.Vehicle v){
+        section("Service schedule","Maintenance deadlines at a glance.");
+        addButton("＋  Add service reminder",()->serviceDialog(v,null));
+        double odo=db.currentOdometerKm(v.id);
+        summaryNote(db.overdueServices(v.id,System.currentTimeMillis())+" overdue",fmt(odo/unitFactor(v))+" "+distUnit(v)+" current recorded odometer");
+        List<GarageDb.Service> services=db.services(v.id);
+        if(services.isEmpty())noRecords("No maintenance reminders","Schedule oil changes, tire rotations, inspections or registrations.");
+        for(GarageDb.Service service:services){
+            int priority=service.priority(System.currentTimeMillis(),odo);
+            String flag=priority==3?"COMPLETED":priority==0?"OVERDUE":priority==1?"DUE SOON":"SCHEDULED";
+            String criteria=(service.dueDate>0?"By "+iso(service.dueDate):"")
+                +(service.dueKm>0?(service.dueDate>0?" · ":"")+fmt(service.dueKm/unitFactor(v))+" "+distUnit(v):"");
+            LinearLayout card=record(flag+"  ·  "+service.title,criteria+(service.note.isEmpty()?"":"  ·  "+service.note));
+            card.setOnClickListener(w->serviceDialog(v,service));
+            card.setOnLongClickListener(w->{
+                new AlertDialog.Builder(this).setTitle(service.title).setItems(new String[]{service.completed?"Mark as pending":"Mark completed","Edit reminder","Delete"},(dialog,which)->{
+                    if(which==0){db.saveService(v.id,service.id,service.title,service.dueDate,service.dueKm,service.note,!service.completed);render();}
+                    if(which==1)serviceDialog(v,service);
+                    if(which==2)confirm("Delete reminder?","This reminder will be removed.",()->db.deleteService(v.id,service.id));
+                }).show();return true;
+            });
+            body.addView(card,Ui.below(this,10));
+        }
+        note("Tap to edit · long-press to complete, reopen or delete. Due status is calculated on-device; notifications are not enabled yet.");
+    }
+    private void serviceDialog(GarageDb.Vehicle v,GarageDb.Service existing){
+        LinearLayout col=Ui.col(this);
+        EditText title=field(col,"SERVICE TITLE","Oil change",false);
+        EditText date=field(col,"DUE DATE (YYYY-MM-DD, OPTIONAL)","2027-01-15",false);
+        EditText odo=field(col,"DUE ODOMETER ("+distUnit(v)+", OPTIONAL)","45000",true);
+        EditText note=field(col,"NOTES","Oil type, mechanic, etc.",false);
+        CheckBox done=new CheckBox(this);done.setText("Completed");done.setTextColor(Ui.INK);col.addView(done,Ui.below(this,10));
+        if(existing!=null){
+            title.setText(existing.title);date.setText(existing.dueDate>0?iso(existing.dueDate):"");
+            odo.setText(existing.dueKm>0?Double.toString(existing.dueKm/unitFactor(v)):"");
+            note.setText(existing.note);done.setChecked(existing.completed);
+        }
+        form(existing==null?"New service reminder":"Edit service reminder",col,()->{
+            String s=date.getText().toString().trim();
+            long dateMs=s.isEmpty()?0:editorDate(date,existing==null?0:existing.dueDate);
+            String mileage=odo.getText().toString().trim();
+            double dueKm=mileage.isEmpty()?0:val(odo,"due odometer")*unitFactor(v);
+            db.saveService(v.id,existing==null?0:existing.id,title.getText().toString(),dateMs,dueKm,note.getText().toString(),done.isChecked());
+        });
+    }
+    private void stationSection(GarageDb.Vehicle v){
+        body.addView(Ui.label(this,"SAVED FUEL STATIONS",13,Ui.MUTED,true),Ui.below(this,25));
+        android.widget.Button add=Ui.secondary(this,"＋  Add fuel station");add.setOnClickListener(w->stationDialog(v,null));body.addView(add,Ui.below(this,9));
+        for(GarageDb.Station station:db.stations(v.id)){
+            LinearLayout card=record(station.name,station.address.isEmpty()?"Tap to edit":station.address);
+            card.setOnClickListener(w->stationDialog(v,station));
+            card.setOnLongClickListener(w->{confirm("Delete station?","Existing fill-ups will keep their amounts but lose the station reference.",()->db.deleteStation(v.id,station.id));return true;});
+            body.addView(card,Ui.below(this,8));
+        }
+    }
+    private void stationDialog(GarageDb.Vehicle v,GarageDb.Station existing){
+        LinearLayout col=Ui.col(this);
+        EditText name=field(col,"STATION NAME","Shell",false);
+        EditText address=field(col,"ADDRESS / LOCATION","Optional",false);
+        if(existing!=null){name.setText(existing.name);address.setText(existing.address);}
+        form(existing==null?"Save fuel station":"Edit fuel station",col,()->db.saveStation(v.id,existing==null?0:existing.id,name.getText().toString(),address.getText().toString()));
+    }
+    private void categorySection(GarageDb.Vehicle v){
+        body.addView(Ui.label(this,"CUSTOM EXPENSE CATEGORIES",13,Ui.MUTED,true),Ui.below(this,25));
+        android.widget.Button add=Ui.secondary(this,"＋  Add custom category");add.setOnClickListener(w->categoryDialog(v));body.addView(add,Ui.below(this,9));
+        for(String category:db.customCategories(v.id)){
+            LinearLayout card=record(category,"Long-press to remove from suggestions");
+            card.setOnLongClickListener(w->{confirm("Remove category?","Existing expenses retain their category labels.",()->db.deleteCategory(v.id,category));return true;});
+            body.addView(card,Ui.below(this,8));
+        }
+    }
+    private void categoryDialog(GarageDb.Vehicle v){
+        LinearLayout col=Ui.col(this);
+        EditText name=field(col,"CATEGORY NAME","Car wash",false);
+        form("Add expense category",col,()->db.addCategory(v.id,name.getText().toString()));
     }
     private void fuelScreen(GarageDb.Vehicle v){
         section("Fill-ups","Track every tank, full or partial.");
@@ -201,7 +347,7 @@ public final class MainActivity extends Activity {
     private void fuelRecord(GarageDb.Fuel f,GarageDb.Vehicle v) {
         LinearLayout c=record("⛽  "+fmt(f.liters/fuelFactor(v))+" "+fuelUnit(v)+"  ·  "+usd(f.cost),
             day(f.date)+"   ·   "+fmt(f.odometer/unitFactor(v))+" "+distUnit(v)
-            +"   ·   "+(f.full?"Full tank":"Partial fill-up")+(f.missed?" · Missed entry":""));
+            +"   ·   "+(f.full?"Full tank":"Partial fill-up")+(f.missed?" · Missed entry":"")+(f.stationId>0?" · "+db.stationName(f.stationId):""));
         c.setOnClickListener(view->fuelDialog(v,f));
         c.setOnLongClickListener(view->{confirm("Delete fill-up?","This record will be permanently removed.",()->db.deleteFuel(f.id));return true;});
         body.addView(c,Ui.below(this,10));
@@ -212,6 +358,9 @@ public final class MainActivity extends Activity {
         List<GarageDb.Expense> entries=db.expenses(v.id);
         double sum=0;for(GarageDb.Expense e:entries) sum+=e.amount;
         summaryNote(usd(sum)+" total","Across "+entries.size()+" non-fuel expenses.");
+        android.widget.Button manage=Ui.secondary(this,"Manage custom categories");
+        manage.setOnClickListener(w->categoryDialog(v));
+        body.addView(manage,Ui.below(this,10));
         if(entries.isEmpty()) noRecords("No expenses yet","Log a service, repair, parking charge or any other cost.");
         for(GarageDb.Expense e:entries) {
             LinearLayout c=record(e.category+"  ·  "+usd(e.amount),
@@ -266,7 +415,9 @@ public final class MainActivity extends Activity {
         android.widget.Button restore=Ui.secondary(this,"⤒  Restore RoadLedger backup (.zip)");
         restore.setOnClickListener(w->chooseRestore());
         body.addView(restore,Ui.below(this,12));
-        note("Native ZIP backup includes all vehicle data and import history. It is not encrypted; store it privately.");
+        stationSection(selected);
+        categorySection(selected);
+        note("Native ZIP backup includes vehicles, import history, stations, categories and service schedules. It is not encrypted; store it privately.");
         note("Tap a vehicle to select. Edit above or long-press to delete it and its data.");
     }
 
@@ -385,6 +536,20 @@ public final class MainActivity extends Activity {
         missed.setText("Prior fill-up history is missing");
         missed.setChecked(existing!=null&&existing.missed);missed.setTextColor(Ui.INK);
         col.addView(missed,Ui.below(this,10));
+        // Associate optional saved station, preserving the choice when editing a fill-up.
+        List<GarageDb.Station> stations=db.stations(vehicle.id);
+        String[] stationLabels=new String[stations.size()+1];
+        stationLabels[0]="Unspecified station";
+        int activeStation=0;
+        for(int i=0;i<stations.size();i++) {
+            stationLabels[i+1]=stations.get(i).name;
+            if(existing!=null&&stations.get(i).id==existing.stationId)activeStation=i+1;
+        }
+        col.addView(Ui.label(this,"FUEL STATION",13,Ui.MUTED,true),Ui.below(this,14));
+        Spinner station=new Spinner(this);
+        station.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,stationLabels));
+        station.setSelection(activeStation);
+        col.addView(station,Ui.below(this,4));
         date.setText(iso(existing==null?System.currentTimeMillis():existing.date));
         if(existing!=null){
             odo.setText(Double.toString(existing.odometer/unitFactor(vehicle)));
@@ -399,7 +564,11 @@ public final class MainActivity extends Activity {
             if(existing==null){
                 long id=db.addFuel(vehicle.id,dateMs,distance,qty,amount,full.isChecked());
                 if(missed.isChecked())db.updateFuel(vehicle.id,id,dateMs,distance,qty,amount,full.isChecked(),true);
-            }else db.updateFuel(vehicle.id,existing.id,dateMs,distance,qty,amount,full.isChecked(),missed.isChecked());
+                db.setFuelStation(vehicle.id,id,station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id);
+            }else {
+                db.updateFuel(vehicle.id,existing.id,dateMs,distance,qty,amount,full.isChecked(),missed.isChecked());
+                db.setFuelStation(vehicle.id,existing.id,station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id);
+            }
         });
     }
     private void expenseDialog(GarageDb.Vehicle vehicle){expenseDialog(vehicle,null);}
@@ -408,7 +577,7 @@ public final class MainActivity extends Activity {
         EditText date=field(col,"DATE (YYYY-MM-DD)","2026-11-10",false);
         col.addView(Ui.label(this,"CATEGORY",13,Ui.MUTED,true),Ui.below(this,12));
         Spinner category=new Spinner(this);
-        String[] options={"Maintenance","Repairs","Insurance","Parking","Tolls","Registration","Other"};
+        String[] options=db.categoryOptions(vehicle.id);
         ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,options);
         category.setAdapter(adapter);col.addView(category,Ui.below(this,4));
         EditText amount=field(col,"AMOUNT (USD)","e.g. 89.50",true);

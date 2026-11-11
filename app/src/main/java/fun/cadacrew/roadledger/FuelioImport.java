@@ -347,6 +347,13 @@ public final class FuelioImport {
                     }
                 }
                 result.lastVehicleId=id;
+                // Preserve imported custom expense category names in the new catalog.
+                for(String category:v.categories.values()) {
+                    if(category==null||category.trim().isEmpty()) continue;
+                    ContentValues cv=new ContentValues();
+                    cv.put("vehicle_id",id);cv.put("name",category.trim());
+                    db.insertWithOnConflict("expense_categories",null,cv,SQLiteDatabase.CONFLICT_IGNORE);
+                }
                 for(Fuel f:v.fuels){
                     if(!reserve(db,f.key,"fuel",v.sourceKey)){result.duplicates++;continue;}
                     ContentValues x=new ContentValues();

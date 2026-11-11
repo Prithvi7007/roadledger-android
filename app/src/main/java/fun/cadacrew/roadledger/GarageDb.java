@@ -12,7 +12,7 @@ import java.util.List;
 
 public final class GarageDb extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "roadledger.db";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     public GarageDb(Context context) {
         this(context, DATABASE_NAME);
@@ -37,17 +37,29 @@ public final class GarageDb extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX idx_expenses_vehicle_date ON expenses(vehicle_id,date)");
         db.execSQL("CREATE INDEX idx_trips_vehicle_date ON trips(vehicle_id,date)");
         createImportTables(db);
+        createProductTables(db);
     }
     private static void createImportTables(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS import_vehicle_links (source_key TEXT PRIMARY KEY NOT NULL, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE)");
         db.execSQL("CREATE TABLE IF NOT EXISTS imported_rows (row_key TEXT PRIMARY KEY NOT NULL, record_kind TEXT NOT NULL, vehicle_key TEXT NOT NULL, imported_at INTEGER NOT NULL)");
     }
+    private static void createProductTables(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE fuel ADD COLUMN station_id INTEGER NOT NULL DEFAULT 0");
+        db.execSQL("CREATE TABLE fuel_stations (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, name TEXT NOT NULL, address TEXT NOT NULL DEFAULT '')");
+        db.execSQL("CREATE INDEX idx_stations_vehicle ON fuel_stations(vehicle_id)");
+        db.execSQL("CREATE TABLE service_items (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, title TEXT NOT NULL, due_date INTEGER NOT NULL DEFAULT 0, due_km REAL NOT NULL DEFAULT 0 CHECK(due_km>=0), note TEXT NOT NULL DEFAULT '', completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)))");
+        db.execSQL("CREATE INDEX idx_services_vehicle ON service_items(vehicle_id,completed,due_date)");
+        db.execSQL("CREATE TABLE expense_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE, name TEXT NOT NULL, UNIQUE(vehicle_id,name))");
+    }
     @Override public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion) {
-        if(oldVersion == 1 && newVersion >= 2) {
+        if(oldVersion<1 || oldVersion>newVersion || newVersion!=VERSION)
+            throw new IllegalStateException("Unsupported database migration " + oldVersion + " to " + newVersion);
+        if(oldVersion==1) {
             db.execSQL("ALTER TABLE vehicles ADD COLUMN unit_system INTEGER NOT NULL DEFAULT 0");
             db.execSQL("ALTER TABLE fuel ADD COLUMN missed_fillup INTEGER NOT NULL DEFAULT 0");
             createImportTables(db);
-        } else throw new IllegalStateException("Unsupported database migration " + oldVersion + " to " + newVersion);
+        }
+        if(oldVersion<3) createProductTables(db);
     }
 
     public static final class Vehicle {
@@ -63,8 +75,9 @@ public final class GarageDb extends SQLiteOpenHelper {
         public final long id,vehicleId,date;
         public final double odometer,liters,cost;
         public final boolean full, missed;
-        Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed) {
-            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters; this.cost=cost; this.full=full; this.missed=missed;
+        public final long stationId;
+        Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed,long stationId) {
+            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters; this.cost=cost; this.full=full; this.missed=missed; this.stationId=stationId;
         }
     }
     public static final class Expense {
@@ -156,9 +169,9 @@ public final class GarageDb extends SQLiteOpenHelper {
     public List<Fuel> fuel(long vehicleId) {
         ArrayList<Fuel> result=new ArrayList<>();
         try(Cursor c=getReadableDatabase().query("fuel",
-            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup"},
+            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id"},
             "vehicle_id=?",new String[]{Long.toString(vehicleId)},null,null,"date DESC,id DESC")) {
-            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1,c.getInt(7)==1));
+            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1,c.getInt(7)==1,c.getLong(8)));
         }
         return result;
     }
@@ -208,6 +221,113 @@ public final class GarageDb extends SQLiteOpenHelper {
         getWritableDatabase().delete("trips","id=?",new String[]{Long.toString(id)});
     }
 
+    public static final class Station {
+        public final long id,vehicleId;
+        public final String name,address;
+        Station(long id,long vehicleId,String name,String address){this.id=id;this.vehicleId=vehicleId;this.name=name;this.address=address;}
+    }
+    public static final class Service {
+        public final long id,vehicleId,dueDate;
+        public final String title,note;
+        public final double dueKm;
+        public final boolean completed;
+        Service(long id,long vehicleId,String title,long dueDate,double dueKm,String note,boolean completed){
+            this.id=id;this.vehicleId=vehicleId;this.title=title;this.dueDate=dueDate;this.dueKm=dueKm;this.note=note;this.completed=completed;
+        }
+        public int priority(long now,double odometerKm) {
+            if(completed)return 3;
+            if((dueDate>0&&now>=dueDate)||(dueKm>0&&odometerKm>=dueKm))return 0;
+            if((dueDate>0&&dueDate-now<=30L*86400000L)||(dueKm>0&&dueKm-odometerKm<=1000))return 1;
+            return 2;
+        }
+    }
+    public double currentOdometerKm(long vehicleId){
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT MAX(km) FROM (SELECT odometer AS km FROM fuel WHERE vehicle_id=? UNION ALL SELECT end_km AS km FROM trips WHERE vehicle_id=?)",new String[]{Long.toString(vehicleId),Long.toString(vehicleId)})){
+            return c.moveToFirst()&&!c.isNull(0)?c.getDouble(0):0d;
+        }
+    }
+    public List<Station> stations(long vehicleId){
+        ArrayList<Station> out=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().query("fuel_stations",new String[]{"id","vehicle_id","name","address"},"vehicle_id=?",new String[]{Long.toString(vehicleId)},null,null,"name COLLATE NOCASE")){
+            while(c.moveToNext())out.add(new Station(c.getLong(0),c.getLong(1),c.getString(2),c.getString(3)));
+        }return out;
+    }
+    public long saveStation(long vehicleId,long id,String name,String address){
+        if(name==null||name.trim().isEmpty())throw new IllegalArgumentException("Station name is required.");
+        ContentValues v=new ContentValues();v.put("vehicle_id",vehicleId);v.put("name",name.trim());v.put("address",address==null?"":address.trim());
+        if(id==0)return getWritableDatabase().insertOrThrow("fuel_stations",null,v);
+        if(getWritableDatabase().update("fuel_stations",v,"id=? AND vehicle_id=?",new String[]{Long.toString(id),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Station no longer exists.");
+        return id;
+    }
+    public void deleteStation(long vehicleId,long stationId){
+        SQLiteDatabase sql=getWritableDatabase();sql.beginTransaction();
+        try{
+            ContentValues empty=new ContentValues();empty.put("station_id",0);
+            sql.update("fuel",empty,"vehicle_id=? AND station_id=?",new String[]{Long.toString(vehicleId),Long.toString(stationId)});
+            sql.delete("fuel_stations","id=? AND vehicle_id=?",new String[]{Long.toString(stationId),Long.toString(vehicleId)});
+            sql.setTransactionSuccessful();
+        }finally{sql.endTransaction();}
+    }
+    public String stationName(long stationId){
+        if(stationId<=0)return "";
+        try(Cursor c=getReadableDatabase().query("fuel_stations",new String[]{"name"},"id=?",new String[]{Long.toString(stationId)},null,null,null)){
+            return c.moveToFirst()?c.getString(0):"Unknown station";
+        }
+    }
+    public void setFuelStation(long vehicleId,long fuelId,long stationId){
+        if(stationId>0){
+            boolean exists=false;
+            for(Station station:stations(vehicleId))if(station.id==stationId){exists=true;break;}
+            if(!exists)throw new IllegalArgumentException("Station does not belong to this vehicle.");
+        }
+        ContentValues v=new ContentValues();v.put("station_id",stationId);
+        if(getWritableDatabase().update("fuel",v,"id=? AND vehicle_id=?",new String[]{Long.toString(fuelId),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Fill-up no longer exists.");
+    }
+    public List<Service> services(long vehicleId){
+        ArrayList<Service> out=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().query("service_items",new String[]{"id","vehicle_id","title","due_date","due_km","note","completed"},"vehicle_id=?",new String[]{Long.toString(vehicleId)},null,null,"completed ASC,due_date ASC,id DESC")){
+            while(c.moveToNext())out.add(new Service(c.getLong(0),c.getLong(1),c.getString(2),c.getLong(3),c.getDouble(4),c.getString(5),c.getInt(6)==1));
+        }return out;
+    }
+    public long saveService(long vehicleId,long id,String title,long dueDate,double dueKm,String note,boolean completed){
+        if(title==null||title.trim().isEmpty()||dueDate<0||dueKm<0||!Double.isFinite(dueKm)||(dueDate==0&&dueKm==0))
+            throw new IllegalArgumentException("Enter a service title and a due date or mileage.");
+        ContentValues v=new ContentValues();v.put("vehicle_id",vehicleId);v.put("title",title.trim());v.put("due_date",dueDate);v.put("due_km",dueKm);v.put("note",note==null?"":note.trim());v.put("completed",completed?1:0);
+        if(id==0)return getWritableDatabase().insertOrThrow("service_items",null,v);
+        if(getWritableDatabase().update("service_items",v,"id=? AND vehicle_id=?",new String[]{Long.toString(id),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Service reminder no longer exists.");
+        return id;
+    }
+    public void deleteService(long vehicleId,long id){getWritableDatabase().delete("service_items","id=? AND vehicle_id=?",new String[]{Long.toString(id),Long.toString(vehicleId)});}
+    public int overdueServices(long vehicleId,long now){
+        int count=0;double odo=currentOdometerKm(vehicleId);
+        for(Service item:services(vehicleId))if(item.priority(now,odo)==0)count++;
+        return count;
+    }
+    public void addCategory(long vehicleId,String name){
+        if(name==null||name.trim().isEmpty())throw new IllegalArgumentException("Category name is required.");
+        ContentValues v=new ContentValues();v.put("vehicle_id",vehicleId);v.put("name",name.trim());
+        getWritableDatabase().insertWithOnConflict("expense_categories",null,v,SQLiteDatabase.CONFLICT_IGNORE);
+    }
+    public List<String> customCategories(long vehicleId){
+        ArrayList<String> out=new ArrayList<>();
+        try(Cursor c=getReadableDatabase().query("expense_categories",new String[]{"name"},"vehicle_id=?",new String[]{Long.toString(vehicleId)},null,null,"name COLLATE NOCASE")){
+            while(c.moveToNext())out.add(c.getString(0));
+        }return out;
+    }
+    public String[] categoryOptions(long vehicleId){
+        java.util.LinkedHashSet<String> all=new java.util.LinkedHashSet<>();
+        java.util.Collections.addAll(all,"Maintenance","Repairs","Insurance","Parking","Tolls","Registration","Other");
+        all.addAll(customCategories(vehicleId));
+        for(Expense expense:expenses(vehicleId))all.add(expense.category);
+        return all.toArray(new String[0]);
+    }
+    public void deleteCategory(long vehicleId,String name){
+        // Existing expense records retain the category label to avoid data loss.
+        getWritableDatabase().delete("expense_categories","vehicle_id=? AND name=?",new String[]{Long.toString(vehicleId),name});
+    }
     /**
      * Independent, conservative full-to-full economy calculation.
      * The starting full fill-up is excluded from fuel consumed over the next

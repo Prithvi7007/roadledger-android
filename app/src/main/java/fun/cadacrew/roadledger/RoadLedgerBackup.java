@@ -30,7 +30,7 @@ public final class RoadLedgerBackup {
     private RoadLedgerBackup() {}
 
     static final int FORMAT_VERSION=1;
-    static final int SCHEMA_VERSION=2;
+    static final int SCHEMA_VERSION=3;
     static final int MAX_ARCHIVE_BYTES=32*1024*1024;
     static final int MAX_TABLE_ROWS=200000;
     private static final String FORMAT="roadledger-native-backup";
@@ -41,11 +41,14 @@ public final class RoadLedgerBackup {
     private static final LinkedHashMap<String,String[]> COLUMNS=new LinkedHashMap<>();
     static {
         COLUMNS.put("vehicles",new String[]{"id","name","make","model","unit_system"});
-        COLUMNS.put("fuel",new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup"});
+        COLUMNS.put("fuel",new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id"});
         COLUMNS.put("expenses",new String[]{"id","vehicle_id","date","category","amount","odometer","note"});
         COLUMNS.put("trips",new String[]{"id","vehicle_id","date","start_km","end_km","note"});
         COLUMNS.put("import_vehicle_links",new String[]{"source_key","vehicle_id"});
         COLUMNS.put("imported_rows",new String[]{"row_key","record_kind","vehicle_key","imported_at"});
+        COLUMNS.put("fuel_stations",new String[]{"id","vehicle_id","name","address"});
+        COLUMNS.put("service_items",new String[]{"id","vehicle_id","title","due_date","due_km","note","completed"});
+        COLUMNS.put("expense_categories",new String[]{"id","vehicle_id","name"});
     }
 
     public static final class Snapshot {
@@ -146,13 +149,22 @@ public final class RoadLedgerBackup {
             throw new IOException("Not a complete RoadLedger backup.");
         try{
             JSONObject info=new JSONObject(new String(manifest,StandardCharsets.UTF_8));
-            if(!FORMAT.equals(info.getString("format"))
-                    ||info.getInt("format_version")!=FORMAT_VERSION
-                    ||info.getInt("schema_version")!=SCHEMA_VERSION)
-                throw new IOException("Unsupported RoadLedger backup format or schema.");
+            if(!FORMAT.equals(info.getString("format")) || info.getInt("format_version")!=FORMAT_VERSION)
+                throw new IOException("Unsupported RoadLedger backup format.");
+            int schema=info.getInt("schema_version");
+            if(schema!=2 && schema!=SCHEMA_VERSION)
+                throw new IOException("Unsupported RoadLedger backup schema.");
             if(!sha256(records).equals(info.getString("records_sha256")))
                 throw new IOException("Backup checksum mismatch; no data was changed.");
             JSONObject data=new JSONObject(new String(records,StandardCharsets.UTF_8));
+            // v0.3 backups remain restorable after the v3 database migration.
+            // Only missing optional v3 fields are filled with their schema defaults.
+            if(schema==2) {
+                for(String table:new String[]{"fuel_stations","service_items","expense_categories"})
+                    data.put(table,new JSONArray());
+                JSONArray oldFuel=data.getJSONArray("fuel");
+                for(int i=0;i<oldFuel.length();i++) oldFuel.getJSONObject(i).put("station_id",0);
+            }
             for(Map.Entry<String,String[]> table:COLUMNS.entrySet()){
                 JSONArray rows=data.getJSONArray(table.getKey());
                 if(rows.length()>MAX_TABLE_ROWS)throw new IOException("Too many "+table.getKey()+" records.");
