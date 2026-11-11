@@ -12,8 +12,9 @@ outdir="$(dirname "$signed")"; mkdir -p "$outdir"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 zipalign -f -p 4 "$unsigned" "$work/aligned.apk" >/dev/null
 # No passwords passed on the command line or echoed; apksigner reads a private file.
+{ cat "$ROADLEDGER_PASSWORD_FILE"; cat "$ROADLEDGER_PASSWORD_FILE"; } | \
 apksigner sign --ks "$ROADLEDGER_KEYSTORE" --ks-type PKCS12 --ks-key-alias "$ROADLEDGER_KEY_ALIAS" \
-  --ks-pass "file:$ROADLEDGER_PASSWORD_FILE" --key-pass "file:$ROADLEDGER_PASSWORD_FILE" \
+  --ks-pass stdin --key-pass stdin \
   --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled true \
   --out "$work/signed.apk" "$work/aligned.apk"
 apksigner verify --verbose --print-certs "$work/signed.apk"
