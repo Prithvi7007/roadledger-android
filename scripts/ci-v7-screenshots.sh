@@ -5,7 +5,11 @@ package='fun.cadacrew.roadledger'
 folder='app/build/reports/androidTests/connected/screenshots'
 mkdir -p "$folder"
 fixture="$(mktemp)"
-trap 'rm -f -- "$fixture"' EXIT
+trap 'status=$?; if [ "$status" -ne 0 ]; then echo "v0.7 screenshot capture failed with exit $status"; adb shell pm path "$package" || true; adb logcat -d -t 200 | tail -n 160 || true; fi; rm -f -- "$fixture" "$fixture-wal"; exit "$status"' EXIT
+apk=app/build/outputs/apk/debug/app-debug.apk
+test -s "$apk"
+echo 'Installing debug APK before screenshots (instrumentation may uninstall it)'
+adb install -r "$apk" >/dev/null
 adb shell am force-stop "$package" || true
 adb shell am start -W -n "$package/.V7Activity" >/dev/null
 adb shell am force-stop "$package"
