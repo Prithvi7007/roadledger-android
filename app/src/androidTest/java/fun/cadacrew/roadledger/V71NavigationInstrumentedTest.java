@@ -78,6 +78,11 @@ public final class V71NavigationInstrumentedTest {
             InstrumentationRegistry.getInstrumentation().runOnMainSync(home::performClick);
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             assertTrue(containsText(open.findViewById(android.R.id.content),"Add Fill-up"));
+            View more=named(open.findViewById(android.R.id.content),"More vehicle tools");
+            assertNotNull(more);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(more::performClick);
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            assertTrue(containsText(open.findViewById(android.R.id.content),"Import & backup"));
         }finally{
             if(activity!=null){Activity finish=activity;
                 InstrumentationRegistry.getInstrumentation().runOnMainSync(finish::finish);
@@ -85,4 +90,44 @@ public final class V71NavigationInstrumentedTest {
             db.deleteVehicle(id);db.close();
         }
     }
+    @Test public void importRestoreUsesNativeScreenWithoutLaunchingLegacyActivity(){
+        final Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        GarageDb db=new GarageDb(context);
+        assertTrue("Disposable emulator must start with no vehicle records",db.vehicles().isEmpty());
+        Activity activity=null;
+        try{
+            Intent intent=new Intent(context,V7Activity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity=InstrumentationRegistry.getInstrumentation().startActivitySync(intent);
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            final Activity active=activity;
+            View root=active.findViewById(android.R.id.content);
+            assertTrue(containsText(root,"Import / restore existing data"));
+            View launchButton=findButtonWithText(root,"Import / restore existing data");
+            assertNotNull("Import/restore must be available in the new empty garage",launchButton);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(launchButton::performClick);
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            View page=active.findViewById(android.R.id.content);
+            assertTrue("Must remain in V7 and show native data screen",containsText(page,"Import & backup"));
+            assertTrue(containsText(page,"Import Fuelio CSV"));
+            assertTrue(containsText(page,"Save RoadLedger backup"));
+            assertTrue(containsText(page,"Choose backup ZIP to restore"));
+            assertTrue(containsText(page,"Back up your data"));
+        }finally{
+            if(activity!=null){Activity finish=activity;
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(finish::finish);
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync();}
+            db.close();
+        }
+    }
+    private static View findButtonWithText(View view,String text){
+        if(view instanceof android.widget.Button && ((android.widget.Button)view).getText().toString().equals(text))return view;
+        if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;
+            for(int i=0;i<group.getChildCount();i++){
+                View found=findButtonWithText(group.getChildAt(i),text);
+                if(found!=null)return found;
+            }
+        }
+        return null;
+    }
+
 }

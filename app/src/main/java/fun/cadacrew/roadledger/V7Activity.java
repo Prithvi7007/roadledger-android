@@ -45,11 +45,11 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/** Real v7 launcher: task-centered UI, with original RoadLedger retained for advanced import/restore. */
+/** RoadLedger launcher with native import, backup, and restore workflows. */
 public final class V7Activity extends Activity {
     private static final int BG=Color.rgb(246,248,252),INK=Color.rgb(18,34,56),BLUE=Color.rgb(40,96,230);
     private static final int GREEN=Color.rgb(11,163,133),MUTED=Color.rgb(98,112,134),WHITE=Color.WHITE;
-    private static final int PHOTO=700,PDF=701,CSV=702,GPX=703;
+    private static final int PHOTO=700,PDF=701,CSV=702,GPX=703,DATA_BACKUP=704,DATA_RESTORE=705,DATA_IMPORT=706;
     private GarageDb db;private V7Store store;private long chosen=-1,pendingRoute=0,pendingVehicle=0;
     private String screen="Home";private LinearLayout content;private String pendingKind="Receipt";private long pendingRecordId=0;private String expenseFilter="All";
     private final String[] nav={"Home","Fuel","Trips"};
@@ -116,7 +116,8 @@ public final class V7Activity extends Activity {
         hdr.addView(more,new LinearLayout.LayoutParams(dp(48),dp(48)));more.setOnClickListener(w->go("More"));
         ScrollView scrolling=new ScrollView(this);scrolling.setFillViewport(true);scrolling.setVerticalScrollBarEnabled(false);root.addView(scrolling,new LinearLayout.LayoutParams(-1,0,1));
         content=column();content.setPadding(dp(20),dp(3),dp(20),dp(32));scrolling.addView(content);
-        if(v==null){welcome();}else switch(screen){
+        if("Data".equals(screen)){dataPage();}
+        else if(v==null){welcome();}else switch(screen){
             case "Fuel":fuelPage(v);break;case "Expenses":expensePage(v);break;case "Trips":tripPage(v);break;
             case "Service":servicePage(v);break;case "Insights":insightPage(v);break;case "Stations":stationPage(v);break;
             case "Receipts":receiptPage(v);break;case "Tools":toolsPage(v);break;case "Reports":reportsPage(v);break;
@@ -139,11 +140,11 @@ public final class V7Activity extends Activity {
         }root.addView(bar);
     }
     private void heading(String title,String subtitle){content.addView(text(title,26,INK,true),below(12));content.addView(text(subtitle,13,MUTED,false),below(4));}
-    private void welcome(){heading("Your garage starts here","Add your first vehicle, or import your data from the earlier RoadLedger screen.");
+    private void welcome(){heading("Your garage starts here","Add your first vehicle or bring in your existing data.");
         LinearLayout c=card(content);c.addView(text("Track your vehicle. Know your costs.",20,INK,true));
         c.addView(text("Fill-ups, expenses, service, journeys and reports in one private space.",14,MUTED,false),below(8));
         action(c,"＋ Add your first vehicle",true,this::addVehicle);
-        action(c,"Import / restore existing data",false,this::openClassic);
+        action(c,"Import / restore existing data",false,()->go("Data"));
     }
     private void selectVehicle(){List<GarageDb.Vehicle> list=db.vehicles();String[] labels=new String[list.size()+1];for(int i=0;i<list.size();i++)labels[i]=list.get(i).name+" · "+list.get(i).make;labels[list.size()]="＋ Add another vehicle";
         new AlertDialog.Builder(this).setTitle("Switch vehicle").setItems(labels,(dialog,index)->{if(index==list.size())addVehicle();else{chosen=list.get(index).id;go("Home");}}).show();}
@@ -485,7 +486,7 @@ public final class V7Activity extends Activity {
         group.addView(text("Fuel, expenses, maintenance and journeys with totals",13,MUTED,false),below(8));
         action(group,"↓ Save report as PDF",true,()->{pendingVehicle=v.id;Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/pdf").putExtra(Intent.EXTRA_TITLE,"RoadLedger-"+v.name+"-report.pdf");startActivityForResult(i,PDF);});
         action(group,"↓ Export data as CSV",false,()->{pendingVehicle=v.id;Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("text/csv").putExtra(Intent.EXTRA_TITLE,"RoadLedger-"+v.name+"-report.csv");startActivityForResult(i,CSV);});
-        navTile(content,"Full native backup / restore","ZIP snapshot, Fuelio import, and Google Drive or Dropbox via the Android document picker","Settings");
+        navTile(content,"Import & backup","Save a native ZIP backup, restore records or import Fuelio CSV","Data");
         record(content,"Privacy","No account, advertisements or telemetry are required. A selected cloud provider is accessed through Android's document picker; continuous sync is not enabled.",null);
     }
     private void settingsPage(GarageDb.Vehicle v){heading("Vehicle settings","Customize reminder windows, unit preferences and backups.");
@@ -496,7 +497,7 @@ public final class V7Activity extends Activity {
         Spinner purpose=spinner(p,"DEFAULT TRIP PURPOSE",new String[]{"Personal","Business","Medical","Charity","Other"},java.util.Arrays.asList("Personal","Business","Medical","Charity","Other").indexOf(s.purpose));
         action(p,"Save notification preferences",true,()->{store.saveSettings(v.id,s.currency,(int)value(days,"warning days"),value(km,"warning distance")*factor(v),mute.isChecked(),s.bluetooth,purpose.getSelectedItem().toString());toast("Preferences saved");draw();});
         action(content,"Open full vehicle and tank management",false,this::openClassic);
-        action(content,"Native ZIP backup / restore & Fuelio import",false,this::openClassic);
+        action(content,"Import, backup & restore data",false,()->go("Data"));
         action(content,"Enable Android reminder notifications",false,()->{
             if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},802);
@@ -508,7 +509,8 @@ public final class V7Activity extends Activity {
     private void morePage(GarageDb.Vehicle v){heading("Explore RoadLedger","All your vehicle tools, one tap away.");
         String[] names={"Expenses","Insights","Timeline","Stations","Receipts","Tools","Reports","Settings"};
         for(String name:names)navTile(content,name,description(name),name);
-        action(content,"Advanced Garage / Fuelio import",false,this::openClassic);
+        navTile(content,"Import & backup","Fuelio CSV import, native ZIP backup and restore","Data");
+        action(content,"Advanced vehicle and tank management",false,this::openClassic);
     }
     private String description(String name){switch(name){
         case "Expenses":return "Categorized ownership costs and history";
@@ -529,6 +531,81 @@ public final class V7Activity extends Activity {
         events.sort((a,b)->Long.compare(b.date,a.date));String last="";
         for(Event e:events){String month=new SimpleDateFormat("MMMM yyyy",Locale.US).format(new Date(e.date));if(!month.equals(last)){content.addView(text(month.toUpperCase(Locale.US),12,MUTED,true),below(20));last=month;}record(content,e.title,day(e.date)+" · "+e.detail,null);}
         if(events.isEmpty())record(content,"No activity yet","Add fuel, an expense, service or trip to begin",null);
+    }
+    // Import and backup run in V7Activity; MainActivity is reserved for older
+    // vehicle/tank settings that have not yet migrated to the new interface.
+    private void dataPage(){
+        heading("Import & backup","Manage your existing records without leaving RoadLedger.");
+        LinearLayout importCard=card(content);
+        importCard.addView(text("Import Fuelio history",19,INK,true));
+        importCard.addView(text("Choose a Fuelio CSV export. Review the vehicle and entry counts before adding anything. Existing records are retained; duplicate imports are skipped.",13,MUTED,false),below(8));
+        action(importCard,"Import Fuelio CSV",true,this::pickFuelioCsv);
+        LinearLayout backupCard=card(content);
+        backupCard.addView(text("Back up your data",19,INK,true));
+        backupCard.addView(text("Export a native RoadLedger ZIP containing all vehicles, fill-ups, trips, services, settings, and attachments.",13,MUTED,false),below(8));
+        action(backupCard,"Save RoadLedger backup",true,this::pickNativeBackup);
+        LinearLayout restoreCard=card(content);
+        restoreCard.addView(text("Restore a RoadLedger backup",19,INK,true));
+        restoreCard.addView(text("Restore replaces the entire current RoadLedger database. You will see a record summary and a confirmation before anything changes. Back up your current records first.",13,MUTED,false),below(8));
+        action(restoreCard,"Choose backup ZIP to restore",false,this::pickNativeRestore);
+        record(content,"Private and offline","Files are opened using Android's document picker. Backups are not encrypted. Save them in a private location.",null);
+    }
+    private void pickFuelioCsv(){
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE);
+        // CSV MIME types differ by provider; inspect() strictly validates the content.
+        intent.setType("*/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(intent,DATA_IMPORT);
+    }
+    private void pickNativeBackup(){
+        Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");intent.putExtra(Intent.EXTRA_TITLE,"roadledger-native-backup.zip");
+        startActivityForResult(intent,DATA_BACKUP);
+    }
+    private void pickNativeRestore(){
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(intent,DATA_RESTORE);
+    }
+    private void previewFuelioImport(FuelioImport.Preview preview){
+        if(preview.vehicles.isEmpty()){
+            new AlertDialog.Builder(this).setTitle("No importable vehicles")
+                .setMessage("The selected Fuelio CSV has no recognized vehicle records. No RoadLedger data was changed.")
+                .setPositiveButton("OK",null).show();return;
+        }
+        new AlertDialog.Builder(this).setTitle("Import these Fuelio records?")
+            .setMessage(preview.describe())
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Import",(dialog,which)->{
+                try{
+                    FuelioImport.Outcome outcome=FuelioImport.apply(db,preview);
+                    if(outcome.lastVehicleId>0)chosen=outcome.lastVehicleId;
+                    go("Home");
+                    new AlertDialog.Builder(this).setTitle("Import complete")
+                        .setMessage(outcome.summary()).setPositiveButton("Done",null).show();
+                }catch(Exception e){
+                    new AlertDialog.Builder(this).setTitle("Import failed")
+                        .setMessage("No partial changes were saved. "+e.getMessage())
+                        .setPositiveButton("OK",null).show();
+                }
+            }).show();
+    }
+    private void confirmNativeRestore(RoadLedgerBackup.Snapshot snapshot){
+        new AlertDialog.Builder(this).setTitle("Replace all RoadLedger data?")
+            .setMessage(snapshot.summary()+"\n\nThis replaces existing vehicles, fill-ups, expenses, services and trips. Save a backup of your current data first.")
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Replace all",(dialog,which)->{
+                try{
+                    RoadLedgerBackup.restore(db,snapshot);
+                    chosen=-1;go("Home");
+                    new AlertDialog.Builder(this).setTitle("Restore complete")
+                        .setMessage("The saved RoadLedger records are available in your garage.")
+                        .setPositiveButton("Done",null).show();
+                }catch(Exception e){
+                    new AlertDialog.Builder(this).setTitle("Restore failed")
+                        .setMessage("Existing records were preserved. "+e.getMessage())
+                        .setPositiveButton("OK",null).show();
+                }
+            }).show();
     }
     private void openClassic(){startActivity(new Intent(this,MainActivity.class));}
     private GarageDb.Vehicle findVehicle(long id){for(GarageDb.Vehicle v:db.vehicles())if(v.id==id)return v;return null;}
@@ -568,6 +645,22 @@ public final class V7Activity extends Activity {
                 }
                 String mime=getContentResolver().getType(uri);if(mime==null||!mime.startsWith("image/"))throw new IllegalArgumentException("Choose an image");
                 store.attach(pendingVehicle,pendingKind,pendingRecordId,"receipt-"+System.currentTimeMillis(),mime,bytes,"");toast("Receipt safely added to local database and native backups");go("Receipts");
+            }else if(request==DATA_BACKUP){
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IllegalArgumentException("Could not create backup document");
+                    RoadLedgerBackup.write(db,out);
+                }
+                toast("Backup saved. Store the ZIP privately.");
+            }else if(request==DATA_RESTORE){
+                try(InputStream in=getContentResolver().openInputStream(uri)){
+                    if(in==null)throw new IllegalArgumentException("Could not open backup ZIP");
+                    confirmNativeRestore(RoadLedgerBackup.read(in));
+                }
+            }else if(request==DATA_IMPORT){
+                try(InputStream in=getContentResolver().openInputStream(uri)){
+                    if(in==null)throw new IllegalArgumentException("Could not open Fuelio CSV");
+                    previewFuelioImport(FuelioImport.inspect(in,"Fuelio CSV"));
+                }
             }else if(request==GPX){try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IllegalArgumentException("Cannot open GPX document");out.write(gpx(pendingRoute).getBytes(StandardCharsets.UTF_8));}toast("GPX saved");}
             else if(request==PDF||request==CSV){GarageDb.Vehicle v=findVehicle(pendingVehicle);if(v==null)throw new IllegalArgumentException("Vehicle no longer exists");
                 try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IllegalArgumentException("Cannot open report document");if(request==PDF)writePdf(v,out);else out.write(reportCsv(v).getBytes(StandardCharsets.UTF_8));}toast("Report saved");}

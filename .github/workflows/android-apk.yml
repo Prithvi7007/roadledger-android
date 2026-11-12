@@ -3,7 +3,7 @@
 name: RoadLedger Android APK
 on:
   push:
-    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests', 'feature/roadledger-v032-stable-signing', 'feature/roadledger-v04-core-experience', 'feature/roadledger-v05-rea-offline', 'feature/roadledger-v06-vehicle-service', 'feature/roadledger-v07-full-experience', 'feature/roadledger-v071-home-navigation']
+    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests', 'feature/roadledger-v032-stable-signing', 'feature/roadledger-v04-core-experience', 'feature/roadledger-v05-rea-offline', 'feature/roadledger-v06-vehicle-service', 'feature/roadledger-v07-full-experience', 'feature/roadledger-v071-home-navigation', 'feature/roadledger-v072-native-data']
   pull_request:
   workflow_dispatch:
 
@@ -38,13 +38,13 @@ jobs:
       - name: Upload UNSIGNED release (not installable)
         uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.7.1-unsigned-release-DO-NOT-INSTALL
+          name: RoadLedger-v0.7.2-unsigned-release-DO-NOT-INSTALL
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.7.1-debug-apk
+          name: RoadLedger-v0.7.2-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -81,7 +81,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.7.1-ui-screenshots
+          name: RoadLedger-v0.7.2-ui-screenshots
           path: app/build/reports/androidTests/connected/screenshots/*.png
           if-no-files-found: warn
           retention-days: 30
@@ -89,7 +89,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.7.1-emulator-test-results
+          name: RoadLedger-v0.7.2-emulator-test-results
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
@@ -131,7 +131,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.7.1-upgrade-test-results
+          name: RoadLedger-v0.7.2-upgrade-test-results
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
