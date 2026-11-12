@@ -12,7 +12,7 @@ import java.util.List;
 
 public final class GarageDb extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "roadledger.db";
-    private static final int VERSION = 4;
+    private static final int VERSION = 5;
 
     public GarageDb(Context context) {
         this(context, DATABASE_NAME);
@@ -39,6 +39,7 @@ public final class GarageDb extends SQLiteOpenHelper {
         createImportTables(db);
         createProductTables(db);
         createV05Tables(db);
+        createV06Tables(db);
     }
     private static void createImportTables(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS import_vehicle_links (source_key TEXT PRIMARY KEY NOT NULL, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE)");
@@ -60,6 +61,26 @@ public final class GarageDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE fuelio_archives (sha256 TEXT PRIMARY KEY NOT NULL, source_name TEXT NOT NULL, payload_base64 TEXT NOT NULL, imported_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE import_diagnostics (id INTEGER PRIMARY KEY AUTOINCREMENT, archive_sha256 TEXT NOT NULL REFERENCES fuelio_archives(sha256) ON DELETE CASCADE, row_number INTEGER NOT NULL, section TEXT NOT NULL, message TEXT NOT NULL)");
     }
+    private static void createV06Tables(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN year INTEGER NOT NULL DEFAULT 0");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN vin TEXT NOT NULL DEFAULT ''");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN registration TEXT NOT NULL DEFAULT ''");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN insurance TEXT NOT NULL DEFAULT ''");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN tank1_fuel TEXT NOT NULL DEFAULT 'Gasoline'");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN tank2_fuel TEXT NOT NULL DEFAULT 'Disabled'");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN tank1_unit TEXT NOT NULL DEFAULT 'L'");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN tank2_unit TEXT NOT NULL DEFAULT 'L'");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN tank1_capacity REAL NOT NULL DEFAULT 0");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN tank2_capacity REAL NOT NULL DEFAULT 0");
+        db.execSQL("ALTER TABLE vehicles ADD COLUMN consumption_unit TEXT NOT NULL DEFAULT 'Auto'");
+        db.execSQL("ALTER TABLE fuel ADD COLUMN source_unit TEXT NOT NULL DEFAULT 'L'");
+        db.execSQL("ALTER TABLE fuel ADD COLUMN fuel_subtype TEXT NOT NULL DEFAULT ''");
+        db.execSQL("ALTER TABLE fuel ADD COLUMN discount REAL NOT NULL DEFAULT 0");
+        db.execSQL("ALTER TABLE fuel ADD COLUMN weather TEXT NOT NULL DEFAULT ''");
+        // v0.5 stored everything in native litres; existing imperial vehicles used US gal at input.
+        db.execSQL("UPDATE vehicles SET tank1_unit='US gal',tank2_unit='US gal' WHERE unit_system=1");
+        db.execSQL("UPDATE vehicles SET tank2_fuel='Gasoline' WHERE id IN (SELECT vehicle_id FROM fuel WHERE tank_number=2)");
+    }
     @Override public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion) {
         if(oldVersion<1 || oldVersion>newVersion || newVersion!=VERSION)
             throw new IllegalStateException("Unsupported database migration " + oldVersion + " to " + newVersion);
@@ -70,16 +91,25 @@ public final class GarageDb extends SQLiteOpenHelper {
         }
         if(oldVersion<3) createProductTables(db);
         if(oldVersion<4) createV05Tables(db);
+        if(oldVersion<5) createV06Tables(db);
     }
 
     public static final class Vehicle {
         public final long id;
         public final String name,make,model;
         /** 0 = km / liters, 1 = miles / US gallons. Storage is always metric. */
-        public final int unitSystem;
-        Vehicle(long id,String name,String make,String model,int units) {
+        public final int unitSystem,year;
+        public final String vin,registration,insurance,tank1Fuel,tank2Fuel,tank1Unit,tank2Unit,consumptionUnit;
+        public final double tank1Capacity,tank2Capacity;
+        Vehicle(long id,String name,String make,String model,int units,int year,String vin,String registration,
+                String insurance,String fuel1,String fuel2,String unit1,String unit2,double capacity1,double capacity2,String economy) {
             this.id=id; this.name=name; this.make=make; this.model=model; this.unitSystem=units;
+            this.year=year;this.vin=vin;this.registration=registration;this.insurance=insurance;
+            tank1Fuel=fuel1;tank2Fuel=fuel2;tank1Unit=unit1;tank2Unit=unit2;
+            tank1Capacity=capacity1;tank2Capacity=capacity2;consumptionUnit=economy;
         }
+        public String tankFuel(int tank){return tank==2?tank2Fuel:tank1Fuel;}
+        public String tankUnit(int tank){return tank==2?tank2Unit:tank1Unit;}
     }
     public static final class Fuel {
         public final long id,vehicleId,date;
@@ -87,11 +117,19 @@ public final class GarageDb extends SQLiteOpenHelper {
         public final boolean full, missed;
         public final long stationId;
         public final int tankNumber;
+        public final String sourceUnit,fuelSubtype,weather;
+        public final double discount;
         Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed,long stationId) {
             this(id,vehicleId,date,odo,liters,cost,full,missed,stationId,1);
         }
         Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed,long stationId,int tankNumber) {
-            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters; this.cost=cost; this.full=full; this.missed=missed; this.stationId=stationId; this.tankNumber=tankNumber;
+            this(id,vehicleId,date,odo,liters,cost,full,missed,stationId,tankNumber,"L","",0,"");
+        }
+        Fuel(long id,long vehicleId,long date,double odo,double liters,double cost,boolean full,boolean missed,
+                long stationId,int tankNumber,String sourceUnit,String subtype,double discount,String weather) {
+            this.id=id; this.vehicleId=vehicleId; this.date=date; this.odometer=odo; this.liters=liters;
+            this.cost=cost; this.full=full; this.missed=missed; this.stationId=stationId; this.tankNumber=tankNumber;
+            this.sourceUnit=sourceUnit;this.fuelSubtype=subtype;this.discount=discount;this.weather=weather;
         }
     }
     public static final class Expense {
@@ -123,8 +161,8 @@ public final class GarageDb extends SQLiteOpenHelper {
 
     public List<Vehicle> vehicles() {
         ArrayList<Vehicle> result=new ArrayList<>();
-        try(Cursor c=getReadableDatabase().rawQuery("SELECT id,name,make,model,unit_system FROM vehicles ORDER BY id DESC",null)) {
-            while(c.moveToNext()) result.add(new Vehicle(c.getLong(0),c.getString(1),c.getString(2),c.getString(3),c.getInt(4)));
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT id,name,make,model,unit_system,year,vin,registration,insurance,tank1_fuel,tank2_fuel,tank1_unit,tank2_unit,tank1_capacity,tank2_capacity,consumption_unit FROM vehicles ORDER BY id DESC",null)) {
+            while(c.moveToNext()) result.add(new Vehicle(c.getLong(0),c.getString(1),c.getString(2),c.getString(3),c.getInt(4),c.getInt(5),c.getString(6),c.getString(7),c.getString(8),c.getString(9),c.getString(10),c.getString(11),c.getString(12),c.getDouble(13),c.getDouble(14),c.getString(15)));
         }
         return result;
     }
@@ -140,6 +178,69 @@ public final class GarageDb extends SQLiteOpenHelper {
         x.put("name",name.trim());x.put("make",make==null?"":make.trim());x.put("model",model==null?"":model.trim());
         if(getWritableDatabase().update("vehicles",x,"id=?",new String[]{Long.toString(id)})!=1)
             throw new IllegalArgumentException("Vehicle no longer exists.");
+    }
+    /** Per-vehicle configuration cannot reinterpret historical energy quantities in another physical unit. */
+    public void updateVehiclePreferences(long id,int year,String vin,String registration,String insurance,int distance,
+            String fuel1,String unit1,double capacity1,String fuel2,String unit2,double capacity2,String economy) {
+        if(distance!=0&&distance!=1)throw new IllegalArgumentException("Distance must be kilometres or miles.");
+        if(year<0||!Double.isFinite(capacity1)||!Double.isFinite(capacity2)||capacity1<0||capacity2<0)
+            throw new IllegalArgumentException("Year or tank capacity is invalid.");
+        if("Disabled".equals(fuel1))throw new IllegalArgumentException("Primary tank must have a fuel type.");
+        FuelUnits.checkFuelUnit(fuel1,unit1);FuelUnits.checkFuelUnit(fuel2,unit2);
+        if(!FuelUnits.contains(FuelUnits.ECONOMY,economy))throw new IllegalArgumentException("Unknown economy display unit.");
+        String[] configured={unit1,unit2};
+        SQLiteDatabase sql=getWritableDatabase();
+        for(int tank=1;tank<=2;tank++){
+            try(Cursor c=sql.rawQuery("SELECT DISTINCT source_unit FROM fuel WHERE vehicle_id=? AND tank_number=?",
+                    new String[]{Long.toString(id),Integer.toString(tank)})){
+                while(c.moveToNext()){
+                    if(tank==2&&"Disabled".equals(fuel2))
+                        throw new IllegalArgumentException("Tank 2 has existing fill-ups; keep its fuel type enabled.");
+                    if(!FuelUnits.baseUnit(c.getString(0)).equals(FuelUnits.baseUnit(configured[tank-1])))
+                        throw new IllegalArgumentException("This tank has history in a different physical unit; keep its unit family.");
+                }
+            }
+        }
+        ContentValues x=new ContentValues();
+        x.put("year",year);x.put("vin",vin==null?"":vin.trim());
+        x.put("registration",registration==null?"":registration.trim());
+        x.put("insurance",insurance==null?"":insurance.trim());x.put("unit_system",distance);
+        x.put("tank1_fuel",fuel1);x.put("tank1_unit",unit1);x.put("tank1_capacity",capacity1*FuelUnits.factor(unit1));
+        x.put("tank2_fuel",fuel2);x.put("tank2_unit",unit2);x.put("tank2_capacity",capacity2*FuelUnits.factor(unit2));
+        x.put("consumption_unit",economy);
+        if(sql.update("vehicles",x,"id=?",new String[]{Long.toString(id)})!=1)
+            throw new IllegalArgumentException("Vehicle not found.");
+    }
+    /** Create/update a complete fill-up atomically; discount has already been subtracted from net cost. */
+    public long saveFuelEntry(long vehicleId,long id,long date,double odo,double quantity,double netCost,
+            boolean full,boolean missed,int tank,long stationId,String sourceUnit,String subtype,double discount,String weather) {
+        if(date<=0||odo<0||quantity<=0||netCost<0||discount<0||!Double.isFinite(odo)||
+                !Double.isFinite(quantity)||!Double.isFinite(netCost)||!Double.isFinite(discount))
+            throw new IllegalArgumentException("Invalid fill-up amount, odometer or discount.");
+        if(tank!=1&&tank!=2)throw new IllegalArgumentException("Tank must be 1 or 2.");
+        Vehicle vehicle=null;
+        for(Vehicle candidate:vehicles())if(candidate.id==vehicleId){vehicle=candidate;break;}
+        if(vehicle==null||"Disabled".equals(vehicle.tankFuel(tank)))
+            throw new IllegalArgumentException("This tank is not enabled for this vehicle.");
+        FuelUnits.checkFuelUnit(vehicle.tankFuel(tank),sourceUnit);
+        if(!FuelUnits.baseUnit(sourceUnit).equals(FuelUnits.baseUnit(vehicle.tankUnit(tank))))
+            throw new IllegalArgumentException("Selected unit is incompatible with the tank.");
+        if(stationId>0){
+            boolean found=false;
+            for(Station station:stations(vehicleId))if(station.id==stationId){found=true;break;}
+            if(!found)throw new IllegalArgumentException("Station is not assigned to this vehicle.");
+        }
+        ContentValues values=new ContentValues();
+        values.put("date",date);values.put("odometer",odo);values.put("liters",quantity);
+        values.put("cost",netCost);values.put("full_tank",full?1:0);values.put("missed_fillup",missed?1:0);
+        values.put("tank_number",tank);values.put("station_id",stationId);values.put("source_unit",sourceUnit);
+        values.put("fuel_subtype",subtype==null?"":subtype.trim());values.put("discount",discount);
+        values.put("weather",weather==null?"":weather.trim());
+        SQLiteDatabase sql=getWritableDatabase();
+        if(id==0){values.put("vehicle_id",vehicleId);return sql.insertOrThrow("fuel",null,values);}
+        if(sql.update("fuel",values,"id=? AND vehicle_id=?",new String[]{Long.toString(id),Long.toString(vehicleId)})!=1)
+            throw new IllegalArgumentException("Fill-up no longer exists for this vehicle.");
+        return id;
     }
     public void updateFuel(long vehicleId,long id,long date,double odo,double liters,double cost,boolean full,boolean missed) {
         if(date<=0||odo<0||liters<=0||cost<0||!Double.isFinite(odo)||!Double.isFinite(liters)||!Double.isFinite(cost))
@@ -183,9 +284,9 @@ public final class GarageDb extends SQLiteOpenHelper {
     public List<Fuel> fuel(long vehicleId) {
         ArrayList<Fuel> result=new ArrayList<>();
         try(Cursor c=getReadableDatabase().query("fuel",
-            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id","tank_number"},
+            new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id","tank_number","source_unit","fuel_subtype","discount","weather"},
             "vehicle_id=?",new String[]{Long.toString(vehicleId)},null,null,"date DESC,id DESC")) {
-            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1,c.getInt(7)==1,c.getLong(8),c.getInt(9)));
+            while(c.moveToNext()) result.add(new Fuel(c.getLong(0),c.getLong(1),c.getLong(2),c.getDouble(3),c.getDouble(4),c.getDouble(5),c.getInt(6)==1,c.getInt(7)==1,c.getLong(8),c.getInt(9),c.getString(10),c.getString(11),c.getDouble(12),c.getString(13)));
         }
         return result;
     }

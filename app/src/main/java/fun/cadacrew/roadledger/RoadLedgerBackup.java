@@ -30,7 +30,7 @@ public final class RoadLedgerBackup {
     private RoadLedgerBackup() {}
 
     static final int FORMAT_VERSION=1;
-    static final int SCHEMA_VERSION=4;
+    static final int SCHEMA_VERSION=5;
     static final int MAX_ARCHIVE_BYTES=128*1024*1024;
     static final int MAX_TABLE_ROWS=200000;
     private static final String FORMAT="roadledger-native-backup";
@@ -40,8 +40,8 @@ public final class RoadLedgerBackup {
     // Parent table first for INSERT; child tables are removed in the opposite order.
     private static final LinkedHashMap<String,String[]> COLUMNS=new LinkedHashMap<>();
     static {
-        COLUMNS.put("vehicles",new String[]{"id","name","make","model","unit_system"});
-        COLUMNS.put("fuel",new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id","tank_number"});
+        COLUMNS.put("vehicles",new String[]{"id","name","make","model","unit_system","year","vin","registration","insurance","tank1_fuel","tank2_fuel","tank1_unit","tank2_unit","tank1_capacity","tank2_capacity","consumption_unit"});
+        COLUMNS.put("fuel",new String[]{"id","vehicle_id","date","odometer","liters","cost","full_tank","missed_fillup","station_id","tank_number","source_unit","fuel_subtype","discount","weather"});
         COLUMNS.put("expenses",new String[]{"id","vehicle_id","date","category","amount","odometer","note"});
         COLUMNS.put("trips",new String[]{"id","vehicle_id","date","start_km","end_km","note"});
         COLUMNS.put("import_vehicle_links",new String[]{"source_key","vehicle_id"});
@@ -154,7 +154,7 @@ public final class RoadLedgerBackup {
             if(!FORMAT.equals(info.getString("format")) || info.getInt("format_version")!=FORMAT_VERSION)
                 throw new IOException("Unsupported RoadLedger backup format.");
             int schema=info.getInt("schema_version");
-            if(schema!=2 && schema!=3 && schema!=SCHEMA_VERSION)
+            if(schema!=2 && schema!=3 && schema!=4 && schema!=SCHEMA_VERSION)
                 throw new IOException("Unsupported RoadLedger backup schema.");
             if(!sha256(records).equals(info.getString("records_sha256")))
                 throw new IOException("Backup checksum mismatch; no data was changed.");
@@ -172,6 +172,28 @@ public final class RoadLedgerBackup {
                 data.put("import_diagnostics",new JSONArray());
                 JSONArray olderFuel=data.getJSONArray("fuel");
                 for(int j=0;j<olderFuel.length();j++) olderFuel.getJSONObject(j).put("tank_number",1);
+            }
+            if(schema<=4){
+                JSONArray oldVehicles=data.getJSONArray("vehicles");
+                for(int i=0;i<oldVehicles.length();i++){
+                    JSONObject row=oldVehicles.getJSONObject(i);
+                    row.put("year",0);row.put("vin","");row.put("registration","");row.put("insurance","");
+                    row.put("tank1_fuel","Gasoline");row.put("tank2_fuel","Disabled");
+                    row.put("tank1_unit",row.getInt("unit_system")==1?"US gal":"L");
+                    row.put("tank2_unit",row.getInt("unit_system")==1?"US gal":"L");
+                    row.put("tank1_capacity",0);row.put("tank2_capacity",0);row.put("consumption_unit","Auto");
+                }
+                JSONArray olderFuel=data.getJSONArray("fuel");
+                java.util.HashSet<Long> secondTankVehicleIds=new java.util.HashSet<>();
+                for(int i=0;i<olderFuel.length();i++){
+                    JSONObject row=olderFuel.getJSONObject(i);
+                    row.put("source_unit","L");row.put("fuel_subtype","");row.put("discount",0);row.put("weather","");
+                    if(row.getInt("tank_number")==2)secondTankVehicleIds.add(row.getLong("vehicle_id"));
+                }
+                for(int i=0;i<oldVehicles.length();i++){
+                    JSONObject row=oldVehicles.getJSONObject(i);
+                    if(secondTankVehicleIds.contains(row.getLong("id")))row.put("tank2_fuel","Gasoline");
+                }
             }
             for(Map.Entry<String,String[]> table:COLUMNS.entrySet()){
                 JSONArray rows=data.getJSONArray(table.getKey());

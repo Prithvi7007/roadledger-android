@@ -114,7 +114,8 @@ public final class MainActivity extends Activity {
         else if(tab==4) moreScreen(vehicle);
         else if(tab==5) expenseScreen(vehicle);
         else if(tab==6) tripScreen(vehicle);
-        else garageScreen(vehicle);
+        else if(tab==7) garageScreen(vehicle);
+        else timelineScreen(vehicle);
         bottomNavigation(shell);
         setContentView(shell);
     }
@@ -170,7 +171,7 @@ public final class MainActivity extends Activity {
         for(GarageDb.Trip t:trips) totalTripKm+=t.endKm-t.startKm;
 
         LinearLayout r1=Ui.row(this);
-        r1.addView(metric("AVERAGE ECONOMY",economyValue(v,economy),v.unitSystem==1?"US MPG":"L / 100 km",Ui.MINT),weighted());
+        r1.addView(metric("AVERAGE ECONOMY",economyValue(v,economy,1),economyLabel(v,1),Ui.MINT),weighted());
         r1.addView(metric("FUEL SPEND",usd(fuelSpend),fuel.size()+" fill-ups",Ui.BLUE),weighted(12));
         body.addView(r1,Ui.below(this,18));
         LinearLayout r2=Ui.row(this);
@@ -180,9 +181,9 @@ public final class MainActivity extends Activity {
 
         LinearLayout chart=Ui.card(this);
         chart.addView(Ui.label(this,"Fuel economy trend",19,Ui.INK,true));
-        chart.addView(Ui.label(this,v.unitSystem==1?"Full-to-full fuel economy · MPG":"Full-to-full fuel economy · L/100 km",12,Ui.MUTED,false),Ui.below(this,4));
+        chart.addView(Ui.label(this,"Full-to-full fuel economy · "+economyLabel(v,1),12,Ui.MUTED,false),Ui.below(this,4));
         List<Double> chartValues=new ArrayList<>();
-        for(Double value:economy.intervalValues)chartValues.add(v.unitSystem==1&&value>0?(235.214583/value):value);
+        for(Double value:economy.intervalValues)chartValues.add(FuelUnits.displayConsumption(value,FuelUnits.baseUnit(v.tankUnit(1)),v.consumptionUnit,v.unitSystem));
         chart.addView(new Ui.EconomyChart(this,chartValues),Ui.below(this,12));
         if(economy.intervalValues.isEmpty()) chart.addView(Ui.label(this,"Record two full tanks to calculate meaningful consumption.",12,Ui.MUTED,false));
         else chart.addView(Ui.label(this,fmt(economy.totalDistanceKm/unitFactor(v))+" "+distUnit(v)+"  ·  "+fmt(economy.totalLiters/fuelFactor(v))+" "+fuelUnit(v)+" in completed intervals",12,Ui.MUTED,false));
@@ -197,6 +198,9 @@ public final class MainActivity extends Activity {
         actions.addView(costButton,weighted(12));
         body.addView(actions,Ui.below(this,18));
         quickLinks();
+        android.widget.Button settings=Ui.secondary(this,"⚙  Vehicle, fuel and units");
+        settings.setOnClickListener(w->vehiclePreferencesDialog(v));
+        body.addView(settings,Ui.below(this,12));
 
         if(!fuel.isEmpty()){
             body.addView(Ui.label(this,"RECENT ACTIVITY",12,Ui.MUTED,true),Ui.below(this,25));
@@ -231,6 +235,7 @@ public final class MainActivity extends Activity {
         section("Explore", "Your records, maintenance, stations and data tools.");
         addButton("▤  Expense history",()->jump(5));
         addButton("↗  Trip history",()->jump(6));
+        addButton("◷  All activity timeline",()->jump(8));
         addButton("▦  Vehicles, stations and backups",()->jump(7));
         addButton("↓  Import Fuelio data",this::importData);
         LinearLayout card=Ui.card(this);
@@ -246,13 +251,14 @@ public final class MainActivity extends Activity {
         GarageDb.Economy second=db.economy(v.id,2);
         boolean hasTank2=false;for(GarageDb.Fuel f:db.fuel(v.id))if(f.tankNumber==2){hasTank2=true;break;}
         if(hasTank2)summaryNote(Double.isNaN(second.litersPer100Km)?"Tank 2 needs full fill-ups":
-            "Tank 2: "+economyValue(v,second)+(v.unitSystem==1?" US MPG":" L / 100 km"),
+            "Tank 2: "+economyValue(v,second,2)+" "+economyLabel(v,2),
             "Calculated separately from primary tank · "+second.intervalValues.size()+" complete intervals");
         RoadLedgerAnalytics.Snapshot s=RoadLedgerAnalytics.compute(db.fuel(v.id),db.expenses(v.id),System.currentTimeMillis());
         GarageDb.Economy e=db.economy(v.id);
         LinearLayout first=Ui.row(this);
         first.addView(metric("ALL-TIME COST",usd(s.totalCost),"Fuel and non-fuel",Ui.MINT),weighted());
-        first.addView(metric("FUEL UNIT PRICE",s.averagePricePerLiter>0?usd(s.averagePricePerLiter*fuelFactor(v)):"—","Average $ / "+fuelUnit(v),Ui.BLUE),weighted(10));
+        first.addView(metric("FUEL UNIT PRICE",hasTank2?"—":s.averagePricePerLiter>0?usd(s.averagePricePerLiter*FuelUnits.factor(v.tankUnit(1))):"—",
+            hasTank2?"Separate tanks have different price units":"Average $ / "+v.tankUnit(1),Ui.BLUE),weighted(10));
         body.addView(first,Ui.below(this,18));
         LinearLayout secondRow=Ui.row(this);
         secondRow.addView(metric("COST PER DISTANCE",hasTank2?"—":e.totalDistanceKm>0?usd(s.totalCost/(e.totalDistanceKm/unitFactor(v))):"—",
@@ -279,11 +285,11 @@ public final class MainActivity extends Activity {
         int limit=0;
         for(GarageDb.Fuel f:db.fuel(v.id)){
             if(limit++>=6)break;
-            recent.addView(Ui.label(this,day(f.date)+"   "+usd(f.cost/(f.liters/fuelFactor(v)))+" / "+fuelUnit(v),13,Ui.INK,false),Ui.below(this,8));
+            recent.addView(Ui.label(this,day(f.date)+" · Tank "+f.tankNumber+" · "+usd(f.cost/FuelUnits.fromBase(f.liters,v.tankUnit(f.tankNumber)))+" / "+v.tankUnit(f.tankNumber),13,Ui.INK,false),Ui.below(this,8));
         }
         if(limit==0)recent.addView(Ui.label(this,"Add fill-ups to see price history",13,Ui.MUTED,false),Ui.below(this,9));
         body.addView(recent,Ui.below(this,16));
-        note("All-time cost per distance uses completed full-to-full fuel intervals as its denominator. It is not a lifecycle vehicle-cost estimate.");
+        note("Full-to-full intervals determine measured consumption. Tank energy units are never converted into incompatible fuel dimensions.");
     }
     private void serviceScreen(GarageDb.Vehicle v){
         section("Service schedule","Maintenance deadlines at a glance.");
@@ -365,13 +371,13 @@ public final class MainActivity extends Activity {
         section("Fill-ups","Track every tank, full or partial.");
         addButton("＋  New fill-up",()->fuelDialog(v));
         GarageDb.Economy e=db.economy(v.id);
-        summaryNote(Double.isNaN(e.litersPer100Km)?"Fuel economy pending":economyValue(v,e)+(v.unitSystem==1?" US MPG":" L / 100 km"),
+        summaryNote(Double.isNaN(e.litersPer100Km)?"Fuel economy pending":economyValue(v,e,1)+" "+economyLabel(v,1),
             e.intervalValues.isEmpty()?"Add two full-tank fill-ups with increasing odometer readings.":"Weighted across "+e.intervalValues.size()+" completed full-to-full intervals.");
         List<GarageDb.Fuel> entries=db.fuel(v.id);
         int secondary=0;for(GarageDb.Fuel f:entries)if(f.tankNumber==2)secondary++;
         if(secondary>0){
             GarageDb.Economy second=db.economy(v.id,2);
-            summaryNote(Double.isNaN(second.litersPer100Km)?"Tank 2 economy pending":"Tank 2: "+economyValue(v,second)+(v.unitSystem==1?" US MPG":" L / 100 km"),
+            summaryNote(Double.isNaN(second.litersPer100Km)?"Tank 2 economy pending":"Tank 2: "+economyValue(v,second,2)+" "+economyLabel(v,2),
                 secondary+" tank 2 fill-ups · "+second.intervalValues.size()+" complete intervals");
         }
         if(entries.isEmpty()) noRecords("No fill-ups yet","Your first entry is one tap away.");
@@ -379,9 +385,9 @@ public final class MainActivity extends Activity {
         note("Tap to edit a fill-up · long-press to delete.");
     }
     private void fuelRecord(GarageDb.Fuel f,GarageDb.Vehicle v) {
-        LinearLayout c=record("⛽  "+fmt(f.liters/fuelFactor(v))+" "+fuelUnit(v)+"  ·  "+usd(f.cost),
-            day(f.date)+"   ·   "+fmt(f.odometer/unitFactor(v))+" "+distUnit(v)
-            +"   ·   Tank "+f.tankNumber+" · "+(f.full?"Full tank":"Partial fill-up")+(f.missed?" · Missed entry":"")+(f.stationId>0?" · "+db.stationName(f.stationId):""));
+        LinearLayout c=record("⛽  "+fmt(FuelUnits.fromBase(f.liters,v.tankUnit(f.tankNumber)))+" "+v.tankUnit(f.tankNumber)+"  ·  "+usd(f.cost),
+            day(f.date)+" "+new SimpleDateFormat("HH:mm",Locale.US).format(new Date(f.date))+"   ·   "+fmt(f.odometer/unitFactor(v))+" "+distUnit(v)
+            +"   ·   Tank "+f.tankNumber+" · "+(f.full?"Full tank":"Partial fill-up")+(f.missed?" · Missed entry":"")+(f.stationId>0?" · "+db.stationName(f.stationId):"")+(f.discount>0?" · Saved "+usd(f.discount):"")+(f.fuelSubtype.isEmpty()?"":" · "+f.fuelSubtype));
         c.setOnClickListener(view->fuelDialog(v,f));
         c.setOnLongClickListener(view->{confirm("Delete fill-up?","This record will be permanently removed.",()->db.deleteFuel(f.id));return true;});
         body.addView(c,Ui.below(this,10));
@@ -420,12 +426,42 @@ public final class MainActivity extends Activity {
         }
         note("Tap a trip to edit · long-press to delete. No GPS is collected.");
     }
+    private static final class ActivityRecord {
+        final long when;final String heading,detail;final Runnable open;
+        ActivityRecord(long time,String heading,String detail,Runnable open){
+            this.when=time;this.heading=heading;this.detail=detail;this.open=open;
+        }
+    }
+    private void timelineScreen(GarageDb.Vehicle v){
+        section("Activity timeline","Fuel, expenses and trips in chronological order, grouped by month.");
+        List<ActivityRecord> records=new ArrayList<>();
+        for(GarageDb.Fuel f:db.fuel(v.id))records.add(new ActivityRecord(f.date,"Fuel · Tank "+f.tankNumber+" · "+usd(f.cost),
+            fmt(FuelUnits.fromBase(f.liters,v.tankUnit(f.tankNumber)))+" "+v.tankUnit(f.tankNumber)+" · "+fmt(f.odometer/unitFactor(v))+" "+distUnit(v),()->fuelDialog(v,f)));
+        for(GarageDb.Expense e:db.expenses(v.id))records.add(new ActivityRecord(e.date,e.category+" · "+usd(e.amount),e.note,()->expenseDialog(v,e)));
+        for(GarageDb.Trip t:db.trips(v.id))records.add(new ActivityRecord(t.date,"Trip · "+fmt((t.endKm-t.startKm)/unitFactor(v))+" "+distUnit(v),t.note,()->tripDialog(v,t)));
+        records.sort((a,b)->Long.compare(b.when,a.when));
+        if(records.isEmpty())noRecords("No activity yet","Add a fill-up, expense or trip to build your timeline.");
+        String lastMonth="";
+        for(ActivityRecord item:records){
+            String month=new SimpleDateFormat("MMMM yyyy",Locale.US).format(new Date(item.when));
+            if(!month.equals(lastMonth)){
+                body.addView(Ui.label(this,month.toUpperCase(Locale.US),12,Ui.MUTED,true),Ui.below(this,20));
+                lastMonth=month;
+            }
+            LinearLayout row=record(item.heading,day(item.when)+" · "+item.detail);
+            row.setOnClickListener(w->item.open.run());
+            body.addView(row,Ui.below(this,9));
+        }
+    }
     private void garageScreen(GarageDb.Vehicle selected){
         section("Your garage","Every vehicle in one private place.");
         addButton("＋  Add another vehicle",this::vehicleDialog);
         android.widget.Button editVehicle=Ui.secondary(this,"✎  Edit selected vehicle");
         editVehicle.setOnClickListener(w->vehicleDialog(selected));
         body.addView(editVehicle,Ui.below(this,10));
+        android.widget.Button prefs=Ui.secondary(this,"⚙  Vehicle details, fuel and units");
+        prefs.setOnClickListener(w->vehiclePreferencesDialog(selected));
+        body.addView(prefs,Ui.below(this,10));
         android.widget.Button importButton=Ui.secondary(this,"↓  Import from Fuelio CSV / Google Drive");
         importButton.setOnClickListener(w->importData());
         body.addView(importButton,Ui.below(this,12));
@@ -547,6 +583,95 @@ public final class MainActivity extends Activity {
         if(!Double.isFinite(n))throw new IllegalArgumentException("Invalid "+field+".");
         return n;
     }
+    private static int indexOf(String[] items,String value){
+        for(int i=0;i<items.length;i++)if(items[i].equals(value))return i;
+        return 0;
+    }
+    private Spinner option(LinearLayout parent,String title,String[] choices,String selected){
+        parent.addView(Ui.label(this,title,13,Ui.MUTED,true),Ui.below(this,12));
+        Spinner spinner=new Spinner(this);
+        spinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,choices));
+        spinner.setSelection(indexOf(choices,selected));
+        parent.addView(spinner,Ui.below(this,4));
+        return spinner;
+    }
+    private void linkFuelUnits(Spinner type,Spinner unit,String preferred){
+        type.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            private boolean initial=true;
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent){}
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent,View view,int pos,long id){
+                String[] units=FuelUnits.unitsFor((String)type.getSelectedItem());
+                String value=initial?preferred:(String)unit.getSelectedItem();
+                unit.setAdapter(new ArrayAdapter<>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,units));
+                unit.setSelection(indexOf(units,value));
+                initial=false;
+            }
+        });
+    }
+    private void watchCapacityUnit(Spinner unit,EditText capacity,String initial){
+        unit.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            private String previous=initial;
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent){}
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent,View view,int pos,long id){
+                String next=(String)unit.getSelectedItem();
+                if(previous.equals(next))return;
+                String input=capacity.getText().toString().trim();
+                if(!input.isEmpty()){
+                    try{
+                        double n=Double.parseDouble(input);
+                        if(FuelUnits.baseUnit(previous).equals(FuelUnits.baseUnit(next)))
+                            capacity.setText(Double.toString(n*FuelUnits.factor(previous)/FuelUnits.factor(next)));
+                        else capacity.setText("");
+                    }catch(Exception invalid){capacity.setText("");}
+                }
+                previous=next;
+            }
+        });
+    }
+    private static double optionalNonnegative(EditText field,String label){
+        String value=field.getText().toString().trim();
+        if(value.isEmpty())return 0;
+        double number=Double.parseDouble(value);
+        if(!Double.isFinite(number)||number<0)throw new IllegalArgumentException("Invalid "+label+".");
+        return number;
+    }
+    private void vehiclePreferencesDialog(GarageDb.Vehicle vehicle){
+        LinearLayout fields=Ui.col(this);
+        EditText year=field(fields,"MODEL YEAR (OPTIONAL)","2022",true);
+        EditText vin=field(fields,"VIN (OPTIONAL)","Vehicle identification number",false);
+        EditText registration=field(fields,"REGISTRATION / PLATE (OPTIONAL)","Plate",false);
+        EditText insurance=field(fields,"INSURANCE (OPTIONAL)","Provider or policy",false);
+        Spinner distance=option(fields,"DISTANCE",FuelUnits.DISTANCES,vehicle.unitSystem==1?"Miles":"Kilometres");
+        Spinner fuel1=option(fields,"PRIMARY FUEL TYPE",FuelUnits.TYPES,vehicle.tank1Fuel);
+        Spinner unit1=option(fields,"PRIMARY QUANTITY UNIT",FuelUnits.unitsFor(vehicle.tank1Fuel),vehicle.tank1Unit);
+        linkFuelUnits(fuel1,unit1,vehicle.tank1Unit);
+        EditText capacity1=field(fields,"PRIMARY TANK CAPACITY (OPTIONAL, IN SELECTED UNIT)","e.g. 40",true);
+        Spinner fuel2=option(fields,"SECOND TANK / BI-FUEL",FuelUnits.TYPES,vehicle.tank2Fuel);
+        Spinner unit2=option(fields,"SECONDARY QUANTITY UNIT",FuelUnits.unitsFor(vehicle.tank2Fuel),vehicle.tank2Unit);
+        linkFuelUnits(fuel2,unit2,vehicle.tank2Unit);
+        EditText capacity2=field(fields,"SECONDARY TANK CAPACITY (OPTIONAL, IN SELECTED UNIT)","e.g. 10",true);
+        Spinner economy=option(fields,"FUEL ECONOMY DISPLAY",FuelUnits.ECONOMY,vehicle.consumptionUnit);
+        year.setText(vehicle.year==0?"":Integer.toString(vehicle.year));vin.setText(vehicle.vin);
+        registration.setText(vehicle.registration);insurance.setText(vehicle.insurance);
+        capacity1.setText(vehicle.tank1Capacity==0?"":Double.toString(FuelUnits.fromBase(vehicle.tank1Capacity,vehicle.tank1Unit)));
+        capacity2.setText(vehicle.tank2Capacity==0?"":Double.toString(FuelUnits.fromBase(vehicle.tank2Capacity,vehicle.tank2Unit)));
+        watchCapacityUnit(unit1,capacity1,vehicle.tank1Unit);
+        watchCapacityUnit(unit2,capacity2,vehicle.tank2Unit);
+        ScrollView scroller=new ScrollView(this);
+        scroller.addView(fields);
+        LinearLayout scrollHost=Ui.col(this);
+        scrollHost.addView(scroller,new LinearLayout.LayoutParams(-1,
+            Math.min(Ui.dp(this,510),(int)(getResources().getDisplayMetrics().heightPixels*.56))));
+        form("Vehicle preferences",scrollHost,()->{
+            String text=year.getText().toString().trim();
+            int numericYear=text.isEmpty()?0:Integer.parseInt(text);
+            db.updateVehiclePreferences(vehicle.id,numericYear,vin.getText().toString(),registration.getText().toString(),
+                insurance.getText().toString(),distance.getSelectedItemPosition(),(String)fuel1.getSelectedItem(),
+                (String)unit1.getSelectedItem(),optionalNonnegative(capacity1,"tank capacity"),
+                (String)fuel2.getSelectedItem(),(String)unit2.getSelectedItem(),optionalNonnegative(capacity2,"tank capacity"),
+                (String)economy.getSelectedItem());
+        });
+    }
     private void vehicleDialog() { vehicleDialog(null); }
     private void vehicleDialog(GarageDb.Vehicle existing) {
         LinearLayout col=Ui.col(this);
@@ -565,58 +690,83 @@ public final class MainActivity extends Activity {
     private void fuelDialog(GarageDb.Vehicle vehicle){fuelDialog(vehicle,null);}
     private void fuelDialog(GarageDb.Vehicle vehicle,GarageDb.Fuel existing) {
         LinearLayout col=Ui.col(this);
-        EditText date=field(col,"DATE (YYYY-MM-DD)","2026-11-10",false);
+        EditText date=field(col,"DATE (YYYY-MM-DD)","2026-11-11",false);
+        EditText time=field(col,"TIME (HH:MM)","18:30",false);
         EditText odo=field(col,"ODOMETER ("+distUnit(vehicle).toUpperCase(Locale.US)+")","e.g. 37000",true);
-        EditText liters=field(col,"FUEL PURCHASED ("+fuelUnit(vehicle).toUpperCase(Locale.US)+")","e.g. 8.5",true);
-        EditText cost=field(col,"TOTAL COST (USD)","e.g. 47.50",true);
-        CheckBox full=new CheckBox(this);
-        full.setText("Filled tank completely");full.setChecked(existing==null||existing.full);full.setTextColor(Ui.INK);
+        EditText quantity=field(col,"FUEL / ENERGY QUANTITY","e.g. 8.5",true);
+        EditText price=field(col,"TOTAL PRICE BEFORE DISCOUNT","e.g. 47.50",true);
+        EditText discount=field(col,"DISCOUNT (OPTIONAL)","e.g. 2.00",true);
+        CheckBox full=new CheckBox(this);full.setText("Filled tank completely");
+        full.setChecked(existing==null||existing.full);full.setTextColor(Ui.INK);
         col.addView(full,Ui.below(this,15));
-        CheckBox missed=new CheckBox(this);
-        missed.setText("Prior fill-up history is missing");
+        CheckBox missed=new CheckBox(this);missed.setText("Prior fill-up history is missing");
         missed.setChecked(existing!=null&&existing.missed);missed.setTextColor(Ui.INK);
         col.addView(missed,Ui.below(this,10));
-        // Associate optional saved station, preserving the choice when editing a fill-up.
-        col.addView(Ui.label(this,"FUEL TANK",13,Ui.MUTED,true),Ui.below(this,14));
+        col.addView(Ui.label(this,"TANK",13,Ui.MUTED,true),Ui.below(this,12));
+        String[] tanks="Disabled".equals(vehicle.tank2Fuel)?new String[]{"Tank 1 · "+vehicle.tank1Fuel}:
+            new String[]{"Tank 1 · "+vehicle.tank1Fuel,"Tank 2 · "+vehicle.tank2Fuel};
         Spinner tank=new Spinner(this);
-        tank.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
-            new String[]{"Tank 1 · Primary","Tank 2 · Secondary"}));
-        tank.setSelection(existing!=null&&existing.tankNumber==2?1:0);
+        tank.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,tanks));
+        tank.setSelection(existing!=null&&existing.tankNumber==2&&tanks.length==2?1:0);
         col.addView(tank,Ui.below(this,4));
+        col.addView(Ui.label(this,"QUANTITY UNIT",13,Ui.MUTED,true),Ui.below(this,12));
+        Spinner unit=new Spinner(this);col.addView(unit,Ui.below(this,4));
+        int selectedTank=(existing!=null&&existing.tankNumber==2&&tanks.length==2)?2:1;
+        String preferred=existing==null?vehicle.tankUnit(selectedTank):existing.sourceUnit;
+        if(existing!=null&&"L".equals(preferred)&&vehicle.unitSystem==1&&
+                "L".equals(FuelUnits.baseUnit(vehicle.tankUnit(selectedTank))))preferred=vehicle.tankUnit(selectedTank);
+        if(!FuelUnits.contains(FuelUnits.unitsFor(vehicle.tankFuel(selectedTank)),preferred))
+            preferred=vehicle.tankUnit(selectedTank);
+        String[] available=FuelUnits.unitsFor(vehicle.tankFuel(selectedTank));
+        unit.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,available));
+        unit.setSelection(indexOf(available,preferred));
+        final int[] lastTank={selectedTank};
+        tank.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent){}
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){
+                int chosen=position+1;
+                if(chosen==lastTank[0])return;
+                lastTank[0]=chosen;
+                String[] units=FuelUnits.unitsFor(vehicle.tankFuel(chosen));
+                unit.setAdapter(new ArrayAdapter<>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,units));
+                unit.setSelection(indexOf(units,vehicle.tankUnit(chosen)));
+                quantity.setText(""); // Tank switch requires new quantity; never silently reinterpret units.
+            }
+        });
         List<GarageDb.Station> stations=db.stations(vehicle.id);
-        String[] stationLabels=new String[stations.size()+1];
-        stationLabels[0]="Unspecified station";
+        String[] names=new String[stations.size()+1];names[0]="Unspecified station";
         int activeStation=0;
-        for(int i=0;i<stations.size();i++) {
-            stationLabels[i+1]=stations.get(i).name;
+        for(int i=0;i<stations.size();i++){
+            names[i+1]=stations.get(i).name;
             if(existing!=null&&stations.get(i).id==existing.stationId)activeStation=i+1;
         }
-        col.addView(Ui.label(this,"FUEL STATION",13,Ui.MUTED,true),Ui.below(this,14));
-        Spinner station=new Spinner(this);
-        station.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,stationLabels));
+        Spinner station=option(col,"FUEL STATION",names,names[0]);
         station.setSelection(activeStation);
-        col.addView(station,Ui.below(this,4));
-        date.setText(iso(existing==null?System.currentTimeMillis():existing.date));
+        EditText subtype=field(col,"FUEL SUBTYPE (OPTIONAL)","e.g. E85, premium",false);
+        EditText weather=field(col,"WEATHER (OPTIONAL, MANUAL)","e.g. Rain",false);
+        long timestamp=existing==null?System.currentTimeMillis():existing.date;
+        date.setText(iso(timestamp));
+        time.setText(new SimpleDateFormat("HH:mm",Locale.US).format(new Date(timestamp)));
         if(existing!=null){
             odo.setText(Double.toString(existing.odometer/unitFactor(vehicle)));
-            liters.setText(Double.toString(existing.liters/fuelFactor(vehicle)));
-            cost.setText(Double.toString(existing.cost));
+            quantity.setText(Double.toString(FuelUnits.fromBase(existing.liters,preferred)));
+            price.setText(Double.toString(existing.cost+existing.discount));
+            discount.setText(existing.discount==0?"":Double.toString(existing.discount));
+            subtype.setText(existing.fuelSubtype);weather.setText(existing.weather);
         }
+        watchCapacityUnit(unit,quantity,preferred);
         form(existing==null?"New fill-up":"Edit fill-up",col,()->{
-            long dateMs=editorDate(date,existing==null?0:existing.date);
+            long dateMs=editorDateTime(date,time,existing==null?0:existing.date);
             double distance=val(odo,"odometer")*unitFactor(vehicle);
-            double qty=val(liters,"fuel")*fuelFactor(vehicle);
-            double amount=val(cost,"cost");
-            if(existing==null){
-                long id=db.addFuel(vehicle.id,dateMs,distance,qty,amount,full.isChecked());
-                if(missed.isChecked())db.updateFuel(vehicle.id,id,dateMs,distance,qty,amount,full.isChecked(),true);
-                db.setFuelStation(vehicle.id,id,station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id);
-                db.setFuelTank(vehicle.id,id,tank.getSelectedItemPosition()+1);
-            }else {
-                db.updateFuel(vehicle.id,existing.id,dateMs,distance,qty,amount,full.isChecked(),missed.isChecked());
-                db.setFuelStation(vehicle.id,existing.id,station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id);
-                db.setFuelTank(vehicle.id,existing.id,tank.getSelectedItemPosition()+1);
-            }
+            String unitChoice=(String)unit.getSelectedItem();
+            double amount=FuelUnits.toBase(val(quantity,"quantity"),unitChoice);
+            double gross=val(price,"total price");
+            double reduction=optionalNonnegative(discount,"discount");
+            if(reduction>gross)throw new IllegalArgumentException("Discount cannot exceed total price.");
+            long stationId=station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id;
+            db.saveFuelEntry(vehicle.id,existing==null?0:existing.id,dateMs,distance,amount,gross-reduction,
+                full.isChecked(),missed.isChecked(),tank.getSelectedItemPosition()+1,stationId,unitChoice,
+                subtype.getText().toString(),reduction,weather.getText().toString());
         });
     }
     private void expenseDialog(GarageDb.Vehicle vehicle){expenseDialog(vehicle,null);}
@@ -678,6 +828,17 @@ public final class MainActivity extends Activity {
             else db.updateTrip(vehicle.id,existing.id,dateMs,startKm,endKm,note.getText().toString());
         });
     }
+    private static long editorDateTime(EditText date,EditText time,long original) throws Exception {
+        String input=date.getText().toString().trim()+" "+time.getText().toString().trim();
+        SimpleDateFormat format=new SimpleDateFormat("yyyy-MM-dd HH:mm",Locale.US);
+        format.setLenient(false);
+        java.text.ParsePosition pos=new java.text.ParsePosition(0);
+        Date parsed=format.parse(input,pos);
+        if(parsed==null||pos.getIndex()!=input.length()||input.length()!=16)
+            throw new IllegalArgumentException("Use YYYY-MM-DD and 24-hour HH:MM for fill-up date/time.");
+        if(original>0&&input.equals(format.format(new Date(original))))return original;
+        return parsed.getTime();
+    }
     private static long editorDate(EditText field,long original) throws Exception {
         String value=field.getText().toString().trim();
         SimpleDateFormat formatter=new SimpleDateFormat("yyyy-MM-dd",Locale.US);
@@ -699,9 +860,11 @@ public final class MainActivity extends Activity {
     private static double fuelFactor(GarageDb.Vehicle v){return v.unitSystem==1?LITERS_PER_GALLON:1;}
     private static String distUnit(GarageDb.Vehicle v){return v.unitSystem==1?"mi":"km";}
     private static String fuelUnit(GarageDb.Vehicle v){return v.unitSystem==1?"gal":"L";}
-    private static String economyValue(GarageDb.Vehicle v,GarageDb.Economy e){
-        if(Double.isNaN(e.litersPer100Km)||e.litersPer100Km<=0)return "—";
-        return fmt(v.unitSystem==1?235.214583/e.litersPer100Km:e.litersPer100Km);
+    private static String economyLabel(GarageDb.Vehicle v,int tank){
+        return FuelUnits.consumptionUnit(FuelUnits.baseUnit(v.tankUnit(tank)),v.consumptionUnit,v.unitSystem);
+    }
+    private static String economyValue(GarageDb.Vehicle v,GarageDb.Economy e,int tank){
+        return fmt(FuelUnits.displayConsumption(e.litersPer100Km,FuelUnits.baseUnit(v.tankUnit(tank)),v.consumptionUnit,v.unitSystem));
     }
     private void importData(){
         Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -864,15 +1027,15 @@ public final class MainActivity extends Activity {
     }
     private String buildCsv(){
         StringBuilder b=new StringBuilder();
-        b.append("record_type,vehicle_id,vehicle_name,date,odometer_start_km,odometer_end_km,liters,amount_usd,full_tank,category,note\n");
+        b.append("record_type,vehicle_id,vehicle_name,date,odometer_start_km,odometer_end_km,quantity_base,quantity_base_unit,amount_usd,full_tank,category,note\n");
         for(GarageDb.Vehicle v:db.vehicles()){
-            csv(b,"vehicle",v.id,v.name,"","","","","","","",join(v.make,v.model));
+            csv(b,"vehicle",v.id,v.name,"","","","","","","","",join(v.make,v.model));
             for(GarageDb.Fuel f:db.fuel(v.id))
-                csv(b,"fuel",v.id,v.name,iso(f.date),f.odometer,"",f.liters,f.cost,f.full?"yes":"no","","");
+                csv(b,"fuel",v.id,v.name,iso(f.date),f.odometer,"",f.liters,FuelUnits.baseUnit(f.sourceUnit),f.cost,f.full?"yes":"no","","");
             for(GarageDb.Expense e:db.expenses(v.id))
-                csv(b,"expense",v.id,v.name,iso(e.date),e.odometer,"","",e.amount,"",e.category,e.note);
+                csv(b,"expense",v.id,v.name,iso(e.date),e.odometer,"","","",e.amount,"",e.category,e.note);
             for(GarageDb.Trip t:db.trips(v.id))
-                csv(b,"trip",v.id,v.name,iso(t.date),t.startKm,t.endKm,"","","","",t.note);
+                csv(b,"trip",v.id,v.name,iso(t.date),t.startKm,t.endKm,"","","","","",t.note);
         }
         return b.toString();
     }

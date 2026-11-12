@@ -33,32 +33,34 @@ public final class RoadLedgerReport {
         csv(out,"Important","Tank economy is calculated from all historical fill-ups; period totals below use the selected date range.");
         csv(out,"Source","Independently calculated full-to-full intervals; incomplete or missed intervals are excluded.");
         csv(out);
-        csv(out,"Metric","Tank","Distance km","Fuel liters","Weighted L/100 km","Completed intervals","US MPG");
-        stats(out,first);stats(out,second);
+        csv(out,"Metric","Tank","Distance km","Quantity in base unit","Base unit","Weighted base unit/100 km","Completed intervals","Displayed economy","Display unit");
+        stats(out,first,vehicle,1);stats(out,second,vehicle,2);
         csv(out);
-        csv(out,"Record type","Date","Tank","Odometer km","Fuel liters","Amount","Full","Missed","Station","Category","Notes");
+        csv(out,"Record type","Date","Tank","Odometer km","Quantity in base unit","Base unit","Original unit","Net amount","Discount","Full","Missed","Station","Category","Notes");
         double fuelTotal=0,expenseTotal=0,tripDistance=0;
         for(GarageDb.Fuel f:fuel)if(inRange(f.date,since,now)){
             fuelTotal+=f.cost;
-            csv(out,"Fuel",date(f.date),f.tankNumber,f.odometer,f.liters,f.cost,f.full,f.missed,
-                f.stationId>0?db.stationName(f.stationId):"","", "");
+            csv(out,"Fuel",date(f.date),f.tankNumber,f.odometer,f.liters,FuelUnits.baseUnit(f.sourceUnit),
+                f.sourceUnit,f.cost,f.discount,f.full,f.missed,f.stationId>0?db.stationName(f.stationId):"","", f.fuelSubtype);
         }
         for(GarageDb.Expense e:expenses)if(inRange(e.date,since,now)){
             expenseTotal+=e.amount;
-            csv(out,"Expense",date(e.date),"",e.odometer,"",e.amount,"","","",e.category,e.note);
+            csv(out,"Expense",date(e.date),"",e.odometer,"","","",e.amount,"","","","",e.category,e.note);
         }
         for(GarageDb.Trip t:trips)if(inRange(t.date,since,now)){
             tripDistance+=t.endKm-t.startKm;
-            csv(out,"Trip",date(t.date),"",t.startKm,"","","","","","",t.note);
+            csv(out,"Trip",date(t.date),"",t.startKm,"","","","","","","","","",t.note);
         }
         csv(out);
         csv(out,"Totals","Fuel cost",fuelTotal,"Non-fuel cost",expenseTotal,"Combined cost",fuelTotal+expenseTotal,"Trip km",tripDistance);
         out.flush();
     }
-    private static void stats(BufferedWriter out,RoadLedgerFuelMath.Result s) throws IOException {
-        csv(out,"Economy",s.tank,s.distanceKm,s.consumedLiters,
-            Double.isNaN(s.weightedLitersPer100Km)?"N/A":s.weightedLitersPer100Km,
-            s.intervals.size(),Double.isNaN(s.weightedLitersPer100Km)?"N/A":RoadLedgerFuelMath.mpgUs(s.weightedLitersPer100Km));
+    private static void stats(BufferedWriter out,RoadLedgerFuelMath.Result s,GarageDb.Vehicle vehicle,int tank) throws IOException {
+        String base=FuelUnits.baseUnit(vehicle.tankUnit(tank));
+        String display=FuelUnits.consumptionUnit(base,vehicle.consumptionUnit,vehicle.unitSystem);
+        csv(out,"Economy",s.tank,s.distanceKm,s.consumedLiters,base,
+            Double.isNaN(s.weightedLitersPer100Km)?"N/A":s.weightedLitersPer100Km,s.intervals.size(),
+            Double.isNaN(s.weightedLitersPer100Km)?"N/A":FuelUnits.displayConsumption(s.weightedLitersPer100Km,base,display,vehicle.unitSystem),display);
     }
     private static boolean inRange(long when,long from,long to){return when>=from&&when<=to;}
     private static String date(long ms){return new SimpleDateFormat("yyyy-MM-dd",Locale.US).format(new Date(ms));}

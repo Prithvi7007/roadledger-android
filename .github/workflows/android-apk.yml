@@ -3,7 +3,7 @@
 name: RoadLedger Android APK
 on:
   push:
-    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests', 'feature/roadledger-v032-stable-signing', 'feature/roadledger-v04-core-experience', 'feature/roadledger-v05-rea-offline']
+    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests', 'feature/roadledger-v032-stable-signing', 'feature/roadledger-v04-core-experience', 'feature/roadledger-v05-rea-offline', 'feature/roadledger-v06-vehicle-service']
   pull_request:
   workflow_dispatch:
 
