@@ -3,7 +3,7 @@
 name: RoadLedger Android APK
 on:
   push:
-    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests', 'feature/roadledger-v032-stable-signing', 'feature/roadledger-v04-core-experience', 'feature/roadledger-v05-rea-offline', 'feature/roadledger-v06-vehicle-service']
+    branches: [main, 'feature/roadledger-v03-data-safety', 'feature/roadledger-v03-restore-tests', 'feature/roadledger-v032-stable-signing', 'feature/roadledger-v04-core-experience', 'feature/roadledger-v05-rea-offline', 'feature/roadledger-v06-vehicle-service', 'feature/roadledger-v07-full-experience']
   pull_request:
   workflow_dispatch:
 
@@ -36,13 +36,13 @@ jobs:
       - name: Upload UNSIGNED release (not installable)
         uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.3.2-unsigned-release-DO-NOT-INSTALL
+          name: RoadLedger-v0.7-unsigned-release-DO-NOT-INSTALL
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.3-dev-debug-apk
+          name: RoadLedger-v0.7-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -72,12 +72,22 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: gradle --no-daemon :app:connectedDebugAndroidTest
+          script: |
+            gradle --no-daemon :app:connectedDebugAndroidTest
+            bash scripts/ci-v7-screenshots.sh
+      - name: Upload visual UX screenshots from the emulator
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoadLedger-v0.7-ui-screenshots
+          path: app/build/reports/androidTests/connected/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 30
       - name: Upload Android test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.3.1-emulator-test-results
+          name: RoadLedger-v0.7-emulator-test-results
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
@@ -104,19 +114,22 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Exercise in-place v0.3.1 to v0.3.2 upgrade with synthetic records
+      - name: Exercise historical and v0.6 to v0.7 upgrades using synthetic records
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: bash scripts/ci-upgrade-test.sh
+          script: |
+            bash scripts/ci-upgrade-test.sh
+            adb uninstall fun.cadacrew.roadledger
+            bash scripts/ci-v7-upgrade-test.sh
       - name: Upload upgrade test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RoadLedger-v0.3.2-upgrade-test-results
+          name: RoadLedger-v0.7-upgrade-test-results
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/

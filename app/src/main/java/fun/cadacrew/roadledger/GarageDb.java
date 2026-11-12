@@ -12,7 +12,7 @@ import java.util.List;
 
 public final class GarageDb extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "roadledger.db";
-    private static final int VERSION = 5;
+    private static final int VERSION = 6;
 
     public GarageDb(Context context) {
         this(context, DATABASE_NAME);
@@ -40,6 +40,7 @@ public final class GarageDb extends SQLiteOpenHelper {
         createProductTables(db);
         createV05Tables(db);
         createV06Tables(db);
+        V7Store.createSchema(db);
     }
     private static void createImportTables(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS import_vehicle_links (source_key TEXT PRIMARY KEY NOT NULL, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE)");
@@ -92,6 +93,7 @@ public final class GarageDb extends SQLiteOpenHelper {
         if(oldVersion<3) createProductTables(db);
         if(oldVersion<4) createV05Tables(db);
         if(oldVersion<5) createV06Tables(db);
+        if(oldVersion<6) V7Store.createSchema(db);
     }
 
     public static final class Vehicle {

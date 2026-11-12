@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="fuel" android:enabled="true"
+        android:icon="@drawable/ic_roadledger" android:shortcutShortLabel="@string/v7_shortcut_fuel"
+        android:shortcutLongLabel="@string/v7_shortcut_fuel_long">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="fun.cadacrew.roadledger" android:targetClass="fun.cadacrew.roadledger.V7Activity">
+            <extra android:name="screen" android:value="Fuel" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="trips" android:enabled="true"
+        android:icon="@drawable/ic_roadledger" android:shortcutShortLabel="@string/v7_shortcut_trip"
+        android:shortcutLongLabel="@string/v7_shortcut_trip_long">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="fun.cadacrew.roadledger" android:targetClass="fun.cadacrew.roadledger.V7Activity">
+            <extra android:name="screen" android:value="Trips" />
+        </intent>
+    </shortcut>
+</shortcuts>

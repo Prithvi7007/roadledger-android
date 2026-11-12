@@ -70,7 +70,7 @@ adb shell run-as "$package" mkdir -p databases
 adb shell run-as "$package" rm -f databases/roadledger.db-wal databases/roadledger.db-shm databases/roadledger.db-journal
 adb shell run-as "$package" cp /data/local/tmp/roadledger-upgrade-fixture.db databases/roadledger.db
 adb install -r "$new"
-adb shell am start -W -n "$package/.MainActivity" >/dev/null
+adb shell am start -W -n "$package/.V7Activity" >/dev/null
 adb shell am force-stop "$package"
 exported="$test_dir/upgraded.db"
 copy_database "$exported"

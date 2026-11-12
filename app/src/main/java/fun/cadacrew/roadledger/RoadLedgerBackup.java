@@ -30,7 +30,7 @@ public final class RoadLedgerBackup {
     private RoadLedgerBackup() {}
 
     static final int FORMAT_VERSION=1;
-    static final int SCHEMA_VERSION=5;
+    static final int SCHEMA_VERSION=6;
     static final int MAX_ARCHIVE_BYTES=128*1024*1024;
     static final int MAX_TABLE_ROWS=200000;
     private static final String FORMAT="roadledger-native-backup";
@@ -51,6 +51,13 @@ public final class RoadLedgerBackup {
         COLUMNS.put("expense_categories",new String[]{"id","vehicle_id","name"});
         COLUMNS.put("fuelio_archives",new String[]{"sha256","source_name","payload_base64","imported_at"});
         COLUMNS.put("import_diagnostics",new String[]{"id","archive_sha256","row_number","section","message"});
+        COLUMNS.put("service_history",new String[]{"id","vehicle_id","title","date","odometer_km","cost","vendor","note","repeat_days","repeat_km"});
+        COLUMNS.put("v7_vehicle_settings",new String[]{"vehicle_id","currency","warning_days","warning_km","reminders_muted","paired_bluetooth","trip_purpose"});
+        COLUMNS.put("v7_routes",new String[]{"id","vehicle_id","trip_id","started","ended","distance_km","duration_seconds","purpose","note","start_lat","start_lon","end_lat","end_lon","completed"});
+        COLUMNS.put("v7_route_points",new String[]{"id","route_id","time_ms","latitude","longitude","accuracy_m","altitude_m","speed_mps"});
+        COLUMNS.put("v7_attachments",new String[]{"id","vehicle_id","record_kind","record_id","filename","mime_type","payload_base64","ocr_text","captured_at"});
+        COLUMNS.put("v7_station_meta",new String[]{"station_id","favorite","rating","latitude","longitude","last_price","price_updated"});
+        COLUMNS.put("v7_reminder_recurrence",new String[]{"service_id","every_days","every_km","last_notified"});
     }
 
     public static final class Snapshot {
@@ -154,7 +161,7 @@ public final class RoadLedgerBackup {
             if(!FORMAT.equals(info.getString("format")) || info.getInt("format_version")!=FORMAT_VERSION)
                 throw new IOException("Unsupported RoadLedger backup format.");
             int schema=info.getInt("schema_version");
-            if(schema!=2 && schema!=3 && schema!=4 && schema!=SCHEMA_VERSION)
+            if(schema!=2 && schema!=3 && schema!=4 && schema!=5 && schema!=SCHEMA_VERSION)
                 throw new IOException("Unsupported RoadLedger backup schema.");
             if(!sha256(records).equals(info.getString("records_sha256")))
                 throw new IOException("Backup checksum mismatch; no data was changed.");
@@ -195,13 +202,17 @@ public final class RoadLedgerBackup {
                     if(secondTankVehicleIds.contains(row.getLong("id")))row.put("tank2_fuel","Gasoline");
                 }
             }
+            if(schema<=5){
+                for(String table:new String[]{"service_history","v7_vehicle_settings","v7_routes","v7_route_points","v7_attachments","v7_station_meta","v7_reminder_recurrence"})
+                    data.put(table,new JSONArray());
+            }
             for(Map.Entry<String,String[]> table:COLUMNS.entrySet()){
                 JSONArray rows=data.getJSONArray(table.getKey());
                 if(rows.length()>MAX_TABLE_ROWS)throw new IOException("Too many "+table.getKey()+" records.");
                 for(int i=0;i<rows.length();i++){
                     JSONObject item=rows.getJSONObject(i);
                     for(String col:table.getValue()){
-                        if(!item.has(col)||item.isNull(col))
+                        if(!item.has(col)||(item.isNull(col)&&!("v7_routes".equals(table.getKey())&&"trip_id".equals(col))))
                             throw new IOException("Missing "+table.getKey()+"."+col+" on row "+(i+1));
                     }
                 }
@@ -229,6 +240,7 @@ public final class RoadLedgerBackup {
                         else if(val instanceof Long)values.put(key,(Long)val);
                         else if(val instanceof Double)values.put(key,(Double)val);
                         else if(val instanceof String)values.put(key,(String)val);
+                        else if(val==JSONObject.NULL && "v7_routes".equals(table.getKey()) && "trip_id".equals(key))values.putNull(key);
                         else if(val instanceof Number)values.put(key,((Number)val).doubleValue());
                         else throw new IOException("Unsupported backup data in "+table.getKey());
                     }
