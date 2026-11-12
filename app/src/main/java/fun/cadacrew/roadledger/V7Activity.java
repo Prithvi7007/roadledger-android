@@ -12,18 +12,21 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.pdf.PdfDocument;
 import android.graphics.drawable.GradientDrawable;
+import android.content.res.ColorStateList;
 import android.location.Location;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.WindowInsets;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -49,12 +52,19 @@ public final class V7Activity extends Activity {
     private static final int PHOTO=700,PDF=701,CSV=702,GPX=703;
     private GarageDb db;private V7Store store;private long chosen=-1,pendingRoute=0,pendingVehicle=0;
     private String screen="Home";private LinearLayout content;private String pendingKind="Receipt";private long pendingRecordId=0;private String expenseFilter="All";
-    private final String[] nav={"Home","Fuel","Trips","Service","More"};
+    private final String[] nav={"Home","Fuel","Trips"};
     @Override public void onCreate(Bundle saved){super.onCreate(saved);db=new GarageDb(this);store=new V7Store(db);
         if(saved!=null){chosen=saved.getLong("chosen",-1);screen=saved.getString("screen","Home");}
         else if(getIntent()!=null&&getIntent().getStringExtra("screen")!=null)screen=getIntent().getStringExtra("screen");
-        getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(WHITE);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        // Android 15 enforces edge-to-edge; draw in the full window, then explicitly
+        // inset the app root. This also avoids double-spacing on earlier Android releases.
+        if(Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if(Build.VERSION.SDK_INT>=29)getWindow().setNavigationBarContrastEnforced(false);
+        int flags=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        if(Build.VERSION.SDK_INT<30)flags|=View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+        getWindow().getDecorView().setSystemUiVisibility(flags);
         V7ReminderWorker.schedule(getApplicationContext());draw();}
     @Override public void onResume(){super.onResume();if(db!=null)draw();}
     @Override public void onSaveInstanceState(Bundle b){b.putLong("chosen",chosen);b.putString("screen",screen);super.onSaveInstanceState(b);}
@@ -74,11 +84,36 @@ public final class V7Activity extends Activity {
     private void toast(String value){Toast.makeText(this,value,Toast.LENGTH_LONG).show();}
     private GarageDb.Vehicle vehicle(){List<GarageDb.Vehicle> all=db.vehicles();for(GarageDb.Vehicle v:all)if(v.id==chosen)return v;chosen=all.isEmpty()?-1:all.get(0).id;return all.isEmpty()?null:all.get(0);}
     private void go(String target){screen=target;draw();}
+    private boolean isPrimary(String value){return "Home".equals(value)||"Fuel".equals(value)||"Trips".equals(value);}
+    @Override public void onBackPressed(){if(!"Home".equals(screen))go("Home");else super.onBackPressed();}
     private void draw(){
-        GarageDb.Vehicle v=vehicle();LinearLayout root=column();root.setBackgroundColor(BG);setContentView(root);
-        LinearLayout hdr=row();hdr.setPadding(dp(22),dp(18),dp(22),dp(14));root.addView(hdr);
-        LinearLayout brand=column();brand.addView(text("ROADLEDGER",22,INK,true));brand.addView(text("VEHICLE CONTROL CENTER · v0.7",10,MUTED,true));hdr.addView(brand,grow());
-        TextView chooser=text(v==null?"＋ ADD CAR":"▾  "+v.name,12,BLUE,true);chooser.setPadding(dp(12),dp(12),dp(12),dp(12));chooser.setBackground(bg(Color.rgb(228,236,255),16));chooser.setOnClickListener(w->selectVehicle());hdr.addView(chooser);
+        GarageDb.Vehicle v=vehicle();LinearLayout root=column();root.setBackgroundColor(BG);
+        root.setOnApplyWindowInsetsListener((view,insets)->{
+            int top,bottom;
+            if(Build.VERSION.SDK_INT>=30){
+                android.graphics.Insets safe=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
+                top=safe.top;bottom=safe.bottom;
+            } else {
+                top=insets.getSystemWindowInsetTop();bottom=insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(0,top,0,bottom);
+            return insets;
+        });
+        setContentView(root);
+        root.requestApplyInsets();
+        LinearLayout hdr=row();hdr.setPadding(dp(16),dp(10),dp(16),dp(10));root.addView(hdr);
+        if(!isPrimary(screen)){
+            TextView back=text("‹",32,BLUE,true);back.setGravity(Gravity.CENTER);back.setContentDescription("Back to Home");
+            hdr.addView(back,new LinearLayout.LayoutParams(dp(40),dp(48)));back.setOnClickListener(w->go("Home"));
+        }
+        LinearLayout brand=column();brand.addView(text("ROADLEDGER",21,INK,true));brand.addView(text("YOUR VEHICLE · v0.7.1",10,MUTED,true));hdr.addView(brand,grow());
+        TextView chooser=text(v==null?"＋ CAR":"▾  "+v.name,12,BLUE,true);
+        chooser.setMaxWidth(dp(isPrimary(screen)?125:98));chooser.setSingleLine(true);chooser.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        chooser.setGravity(Gravity.CENTER);chooser.setContentDescription("Switch vehicle");
+        chooser.setPadding(dp(9),dp(10),dp(9),dp(10));chooser.setBackground(bg(Color.rgb(228,236,255),14));
+        chooser.setMinimumHeight(dp(48));chooser.setOnClickListener(w->selectVehicle());hdr.addView(chooser);
+        TextView more=text("⋯",27,BLUE,true);more.setGravity(Gravity.CENTER);more.setContentDescription("More vehicle tools");
+        hdr.addView(more,new LinearLayout.LayoutParams(dp(48),dp(48)));more.setOnClickListener(w->go("More"));
         ScrollView scrolling=new ScrollView(this);scrolling.setFillViewport(true);scrolling.setVerticalScrollBarEnabled(false);root.addView(scrolling,new LinearLayout.LayoutParams(-1,0,1));
         content=column();content.setPadding(dp(20),dp(3),dp(20),dp(32));scrolling.addView(content);
         if(v==null){welcome();}else switch(screen){
@@ -91,14 +126,16 @@ public final class V7Activity extends Activity {
         bottomBar(root);
     }
     private void bottomBar(LinearLayout root){
-        LinearLayout bar=row();bar.setPadding(dp(9),dp(8),dp(9),dp(9));bar.setBackgroundColor(WHITE);
-        String[] icons={"⌂","▤","↗","◷","☰"};
+        LinearLayout bar=row();bar.setPadding(dp(9),dp(5),dp(9),dp(5));bar.setBackgroundColor(WHITE);
+        String[] icons={"⌂","▤","↗"};
         for(int i=0;i<nav.length;i++){
-            final String target=nav[i];boolean selected=screen.equals(target)||(i==4&&!"Home".equals(screen)&&!"Fuel".equals(screen)&&!"Trips".equals(screen)&&!"Service".equals(screen));
-            LinearLayout cell=column();cell.setGravity(Gravity.CENTER);cell.setPadding(dp(4),dp(4),dp(4),dp(4));
-            TextView icon=text(icons[i],24,selected?BLUE:MUTED,true);icon.setGravity(Gravity.CENTER);cell.addView(icon);
-            TextView label=text(target,10,selected?BLUE:MUTED,selected);label.setGravity(Gravity.CENTER);cell.addView(label);
-            cell.setOnClickListener(w->go(target));bar.addView(cell,new LinearLayout.LayoutParams(0,dp(58),1));
+            final String target=nav[i];boolean selected=screen.equals(target);
+            LinearLayout cell=column();cell.setGravity(Gravity.CENTER);cell.setPadding(dp(4),dp(3),dp(4),dp(3));
+            TextView icon=text(icons[i],25,selected?BLUE:MUTED,true);icon.setGravity(Gravity.CENTER);cell.addView(icon);
+            TextView label=text(target,12,selected?BLUE:MUTED,selected);label.setGravity(Gravity.CENTER);cell.addView(label);
+            cell.setContentDescription(target+" tab"+(selected?", selected":""));cell.setFocusable(true);
+            if(selected)cell.setBackground(bg(Color.rgb(232,239,255),16));
+            cell.setOnClickListener(w->go(target));bar.addView(cell,new LinearLayout.LayoutParams(0,dp(62),1));
         }root.addView(bar);
     }
     private void heading(String title,String subtitle){content.addView(text(title,26,INK,true),below(12));content.addView(text(subtitle,13,MUTED,false),below(4));}
@@ -136,23 +173,85 @@ public final class V7Activity extends Activity {
     private double totalFuel(long v){double sum=0;for(GarageDb.Fuel f:db.fuel(v))sum+=f.cost;return sum;}
     private double totalExpenses(long v){double sum=0;for(GarageDb.Expense e:db.expenses(v))sum+=e.amount;for(V7Store.ServiceLog s:store.serviceHistory(v))sum+=s.cost;return sum;}
     private double totalTrips(long v){double sum=0;for(GarageDb.Trip t:db.trips(v))sum+=t.endKm-t.startKm;return sum;}
-    private void homePage(GarageDb.Vehicle v){heading("Good to see you.","Your vehicle overview, all in one place.");
-        LinearLayout hero=column();hero.setPadding(dp(22),dp(23),dp(22),dp(23));hero.setBackground(bg(INK,24));content.addView(hero,below(18));
-        hero.addView(text(v.name+"  ·  "+v.year,22,WHITE,true));hero.addView(text(v.make+" "+v.model,13,Color.rgb(202,217,240),false),below(4));
-        hero.addView(text(num(db.currentOdometerKm(v.id)/factor(v))+" "+dist(v),36,WHITE,true),below(15));hero.addView(text("Latest recorded odometer",11,Color.rgb(169,199,234),false));
-        LinearLayout metrics=row();content.addView(metrics,below(18));
-        metric(metrics,"FUEL",money(totalFuel(v.id)),GREEN);
-        metric(metrics,"OTHER COSTS",money(totalExpenses(v.id)),BLUE);
-        LinearLayout actions=row();content.addView(actions,below(14));Button fill=button("＋ Fuel",true,()->fuelEditor(v,null));Button expense=button("＋ Expense",false,()->expenseEditor(v,null));actions.addView(fill,grow());actions.addView(expense,grow());
-        LinearLayout alerts=card(content);int overdue=db.overdueServices(v.id,System.currentTimeMillis());alerts.addView(text(overdue>0?"⚠  "+overdue+" maintenance items overdue":"✓  Maintenance overview",16,overdue>0?Color.rgb(197,97,35):INK,true));
-        alerts.addView(text(overdue>0?"View upcoming service deadlines":"Keep service history and reminders together",12,MUTED,false),below(7));alerts.setOnClickListener(w->go("Service"));
-        content.addView(text("EVERYTHING YOU NEED",12,MUTED,true),below(25));
-        navTile(content,"Activity timeline","Fuel, expenses, service and journeys","Timeline");
-        navTile(content,"Insights & charts","Trends, average economy and costs","Insights");
-        navTile(content,"Garages & nearby stations","Saved places, prices and map directions","Stations");
-        navTile(content,"Receipts & documents","Save a photo, extract text and keep it in backups","Receipts");
+    private V71HomeStats overviewStats(GarageDb.Vehicle v){
+        V71HomeStats summary=new V71HomeStats(System.currentTimeMillis());
+        for(GarageDb.Fuel f:db.fuel(v.id))summary.addFuel(f.date,f.cost);
+        for(GarageDb.Expense e:db.expenses(v.id))summary.addExpense(e.date,e.amount);
+        for(V7Store.ServiceLog l:store.serviceHistory(v.id))summary.addService(l.date,l.cost);
+        for(GarageDb.Trip t:db.trips(v.id))summary.addTrip(t.date,Math.max(0,t.endKm-t.startKm));
+        return summary;
     }
-    private void metric(LinearLayout parent,String label,String stat,int color){LinearLayout x=column();x.setPadding(dp(15),dp(15),dp(12),dp(15));x.setBackground(bg(WHITE,18));x.addView(text(label,11,MUTED,true));x.addView(text(stat,19,color,true),below(9));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(90),1);p.rightMargin=dp(8);parent.addView(x,p);}
+    private void monthlySpending(LinearLayout parent,V71HomeStats summary){
+        LinearLayout panel=card(parent);
+        panel.addView(text("SPENDING TREND",12,MUTED,true));
+        panel.addView(text("Last 6 calendar months · fuel + other costs",12,MUTED,false),below(4));
+        double max=summary.highestMonthSpend();
+        if(max<=0){panel.addView(text("No spending recorded in this period yet.",14,MUTED,false),below(16));return;}
+        V71HomeStats.Month[] months=summary.months();
+        for(V71HomeStats.Month month:months){
+            LinearLayout line=row();panel.addView(line,below(12));
+            TextView monthText=text(month.label,12,MUTED,true);
+            line.addView(monthText,new LinearLayout.LayoutParams(dp(40),dp(26)));
+            ProgressBar bar=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
+            bar.setIndeterminate(false);bar.setMax(1000);
+            bar.setProgress((int)Math.round(month.totalSpend()/max*1000));
+            bar.setProgressTintList(ColorStateList.valueOf(month==months[5]?GREEN:BLUE));
+            bar.setProgressBackgroundTintList(ColorStateList.valueOf(Color.rgb(232,239,248)));
+            bar.setContentDescription(month.label+" spending "+money(month.totalSpend()));
+            LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(0,dp(12),1);
+            bp.setMargins(dp(6),0,dp(9),0);line.addView(bar,bp);
+            TextView dollars=text(money(month.totalSpend()),11,INK,true);
+            dollars.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
+            line.addView(dollars,new LinearLayout.LayoutParams(dp(89),dp(26)));
+        }
+    }
+    private void homePage(GarageDb.Vehicle v){
+        heading("Your overview","One place for fuel, driving and maintenance.");
+        V71HomeStats summary=overviewStats(v);
+        LinearLayout hero=column();hero.setPadding(dp(21),dp(22),dp(21),dp(22));hero.setBackground(bg(INK,24));content.addView(hero,below(16));
+        hero.addView(text(v.name+(v.year>0?"  ·  "+v.year:""),21,WHITE,true));
+        hero.addView(text((v.make+" "+v.model).trim(),13,Color.rgb(202,217,240),false),below(4));
+        hero.addView(text(num(db.currentOdometerKm(v.id)/factor(v))+" "+dist(v),33,WHITE,true),below(12));
+        hero.addView(text("LATEST RECORDED ODOMETER",11,Color.rgb(169,199,234),true),below(3));
+        action(content,"＋  Add Fill-up",true,()->fuelEditor(v,null));
+        LinearLayout first=row();content.addView(first,below(15));
+        metric(first,"THIS MONTH · ALL COSTS",money(summary.currentMonthSpend()),BLUE);
+        GarageDb.Economy economy=db.economy(v.id);
+        String unit=FuelUnits.consumptionUnit(FuelUnits.baseUnit(v.tank1Unit),v.consumptionUnit,v.unitSystem);
+        double average=FuelUnits.displayConsumption(economy.litersPer100Km,FuelUnits.baseUnit(v.tank1Unit),v.consumptionUnit,v.unitSystem);
+        String economyValue=economy.intervalValues.isEmpty()||!Double.isFinite(average)?"Pending":num(average)+" "+unit;
+        metric(first,"AVERAGE ECONOMY",economyValue,GREEN);
+        LinearLayout second=row();content.addView(second,below(10));
+        metric(second,"MONTHLY TRIP DISTANCE",num(summary.currentMonthTripKm()/factor(v))+" "+dist(v),BLUE);
+        metric(second,"FUEL SPEND · 6 MONTHS",money(totalLastSixMonthsFuel(summary)),GREEN);
+        monthlySpending(content,summary);
+        LinearLayout shortcuts=row();content.addView(shortcuts,below(12));
+        Button fuel=button("Fuel history",false,()->go("Fuel"));
+        Button trips=button("My trips",false,()->go("Trips"));
+        LinearLayout.LayoutParams a=grow();a.rightMargin=dp(8);shortcuts.addView(fuel,a);shortcuts.addView(trips,grow());
+        List<GarageDb.Fuel> recent=db.fuel(v.id);
+        if(!recent.isEmpty()){
+            GarageDb.Fuel last=recent.get(0);
+            record(content,"Latest fill-up · "+money(last.cost),day(last.date)+" · "+num(last.odometer/factor(v))+" "+dist(v),()->fuelEditor(v,last));
+        }
+        LinearLayout alerts=card(content);int overdue=db.overdueServices(v.id,System.currentTimeMillis());
+        alerts.addView(text(overdue>0?overdue+" maintenance items overdue":"Maintenance & reminders",16,overdue>0?Color.rgb(170,81,23):INK,true));
+        alerts.addView(text("View upcoming service and completed work",12,MUTED,false),below(7));
+        alerts.setContentDescription("Open maintenance and reminders");alerts.setOnClickListener(w->go("Service"));
+        content.addView(text("YOUR VEHICLE TOOLS",12,MUTED,true),below(24));
+        navTile(content,"Expenses","Costs, categories and service spending","Expenses");
+        navTile(content,"Activity timeline","All vehicle entries in date order","Timeline");
+        navTile(content,"More tools & settings","Maintenance, stations, receipts, backups and reports","More");
+    }
+    private double totalLastSixMonthsFuel(V71HomeStats summary){double total=0;for(V71HomeStats.Month m:summary.months())total+=m.fuel;return total;}
+    private void metric(LinearLayout parent,String label,String stat,int color){
+        LinearLayout x=column();x.setPadding(dp(13),dp(13),dp(11),dp(12));x.setBackground(bg(WHITE,18));
+        TextView title=text(label,11,MUTED,true);title.setMaxLines(2);x.addView(title);
+        TextView value=text(stat,18,color,true);value.setSingleLine(true);
+        value.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        value.setContentDescription(label+": "+stat);x.addView(value,below(8));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(97),1);p.rightMargin=dp(6);parent.addView(x,p);
+    }
     private void fuelPage(GarageDb.Vehicle v){heading("Fuel & energy","Every fill-up, every tank, every unit.");LinearLayout top=card(content);
         GarageDb.Economy e=db.economy(v.id);String unit=FuelUnits.consumptionUnit(FuelUnits.baseUnit(v.tank1Unit),v.consumptionUnit,v.unitSystem);
         double consumption=FuelUnits.displayConsumption(e.litersPer100Km,FuelUnits.baseUnit(v.tank1Unit),v.consumptionUnit,v.unitSystem);
@@ -162,7 +261,9 @@ public final class V7Activity extends Activity {
         if(list.isEmpty())record(content,"No fill-ups yet","Record your first refuel or charging session",null);
         for(GarageDb.Fuel f:list){record(content,day(f.date)+" · "+money(f.cost),num(FuelUnits.fromBase(f.liters,f.sourceUnit))+" "+f.sourceUnit+"  ·  "+num(f.odometer/factor(v))+" "+dist(v)+"  ·  Tank "+f.tankNumber,()->fuelEditor(v,f));}
     }
-    private void fuelEditor(GarageDb.Vehicle v,GarageDb.Fuel old){LinearLayout p=form();
+    private void fuelEditor(GarageDb.Vehicle v,GarageDb.Fuel old){
+        final String afterSave="Home".equals(screen)?"Home":"Fuel";
+        LinearLayout p=form();
         EditText date=field(p,"DATE & TIME","YYYY-MM-DD HH:MM",false);date.setText(stamp(old==null?System.currentTimeMillis():old.date));
         EditText odo=field(p,"ODOMETER ("+dist(v)+")","Current odometer",true);if(old!=null)odo.setText(String.valueOf(old.odometer/factor(v)));
         EditText amount=field(p,"QUANTITY","Fuel or energy",true);if(old!=null)amount.setText(String.valueOf(FuelUnits.fromBase(old.liters,v.tankUnit(old.tankNumber))));
@@ -181,7 +282,7 @@ public final class V7Activity extends Activity {
             double gross=value(price,"price"),off=optional(discount,"discount");if(off>gross)throw new IllegalArgumentException("Discount exceeds gross price");
             long sid=station.getSelectedItemPosition()==0?0:stations.get(station.getSelectedItemPosition()-1).id;
             db.saveFuelEntry(v.id,old==null?0:old.id,parseTime(date.getText().toString()),value(odo,"odometer")*factor(v),value(amount,"quantity")*FuelUnits.factor(unit),gross-off,
-                full.isChecked(),missed.isChecked(),selectedTank,sid,unit,subtype.getText().toString(),off,weather.getText().toString());go("Fuel");
+                full.isChecked(),missed.isChecked(),selectedTank,sid,unit,subtype.getText().toString(),off,weather.getText().toString());go(afterSave);
         });
     }
     private void expensePage(GarageDb.Vehicle v){heading("Expenses","See exactly where vehicle ownership costs go.");LinearLayout top=card(content);
